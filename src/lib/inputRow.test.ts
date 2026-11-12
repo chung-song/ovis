@@ -138,6 +138,8 @@ const EXPECTED: Record<string, Record<string, InputRowState>> = {
     // /sessions keeps the empty box for 10 to 15 s before its list draws
     "sessions-open-early-119": "ready", "sessions-open-loading10s-119": "ready", "sessions-closed-119": "ready",
     "session-delete-after-first-enter-119": "draft",
+    // the chat send's draft check: gjc 0.18.12 in the agent lab, empty, typed into, `/mo` typed with its command list open
+    "draft-empty-119": "ready", "draft-typed-119": "draft", "draft-slash-119": "draft",
   },
   omo: {
     // the chat send's draft check (shared/input-row.ts typedDraft): OmO 5.1.69 recorded empty, typed into, with autocomplete open
@@ -196,7 +198,8 @@ describe("inputRowState on recorded screens", () => {
 
   test("every recorded screen is listed above", () => {
     const listed = Object.entries(EXPECTED).flatMap(([agent, screens]) => Object.keys(screens).map((name) => `${agent}/${name}.ansi`)).sort();
-    const files = readdirSync(FIXTURES).filter((agent) => !agent.includes(".")).flatMap((agent) =>
+    // the peek's agents; the draft check's own boxes (shared/input-row.ts typedDraft) are tested below
+    const files = readdirSync(FIXTURES).filter((agent) => readsInputRow(agent)).flatMap((agent) =>
       readdirSync(join(FIXTURES, agent)).filter((file) => file.endsWith(".ansi")).map((file) => `${agent}/${file}`)).sort();
     expect(files).toEqual(listed);
   });
@@ -486,6 +489,25 @@ describe("the chat send's read of the same screens (shared/input-row.ts)", () =>
     const [out, err] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(await child.exited, err).toBe(0);
     expect(out.trim()).toBe("function \u276f typed");
+  });
+
+  test.each([
+    // `/mo` typed with the command list open: its box still drawn whole (gjc, qwen, cline), or pushed out of its place (muse, dsh-tui)
+    ["gjc", true], ["muse", false], ["qwen", true], ["cline", true], ["dsh-tui", false],
+  ])("%s, recorded in the agent lab: typed text is a draft, its empty box and placeholder are not", (agent, slash) => {
+    expect(typed(agent, `${agent}/draft-typed-119.ansi`)).toBeTrue();
+    expect(typed(agent, `${agent}/draft-empty-119.ansi`)).toBeFalse();
+    expect(typed(agent, `${agent}/draft-slash-119.ansi`)).toBe(slash);
+  });
+
+  test("an agent that draws typed text in a colour of its own: only that colour, as recorded, is typed", () => {
+    const muse = readFileSync(join(FIXTURES, "muse/draft-typed-119.ansi"), "utf8");
+    expect(typedDraft("muse", screenFromAnsi(muse))).toBeTrue();
+    // the same words in another theme's colour are no evidence
+    expect(typedDraft("muse", screenFromAnsi(muse.replaceAll("38;2;204;211;219m", "38;2;120;120;120m")))).toBeFalse();
+    const cline = readFileSync(join(FIXTURES, "cline/draft-empty-119.ansi"), "utf8");
+    // cline's grey placeholder
+    expect(typedDraft("cline", screenFromAnsi(cline))).toBeFalse();
   });
 
   test("only typed-looking cells count: the same words dim, grey or italic are no draft", () => {

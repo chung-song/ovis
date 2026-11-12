@@ -1058,6 +1058,9 @@ const alnum = (text: string): string => text.normalize("NFKC").toLowerCase().rep
 /** A text with each run of whitespace one space, every other character as written (no Unicode folding): how the footer path compares. */
 const collapsed = (text: string): string => text.replace(/\s+/g, " ").trim();
 
+/** Plain strong emphasis as the Codex TUI displays it; leave code, escapes and nested markup exact. */
+const displayedStrong = (text: string): string => /[`\\]/.test(text) ? text : text.replace(/(?<!\*)\*\*([^*\n]+)\*\*(?!\*)/g, "$1");
+
 /**
  * The answer a screen shows Codex finished last, with the prompt of its turn, both whitespace-collapsed: an
  * answer block (its "\u2022" line and the indented lines it wraps onto) with Codex's completed-turn footer
@@ -1206,7 +1209,7 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   // candidate (one herdr reported, or a title named, of another folder) can only keep it from owning one
   const owner = maybe?.length === 1 && (footerOwners === null || footerOwners.has(maybe[0]!.path)) ? maybe[0]! : null;
   const ownerLast = owner === null ? null : lastFinishedTurn(owner.text);
-  const footedOwner = owner !== null && ownerLast?.asked != null && collapsed(ownerLast.asked) === footed!.prompt && collapsed(ownerLast.answer) === footed!.text ? owner.path : null;
+  const footedOwner = owner !== null && ownerLast?.asked != null && collapsed(ownerLast.asked) === footed!.prompt && collapsed(displayedStrong(ownerLast.answer)) === footed!.text ? owner.path : null;
   // every answer each candidate gave, as answerAnchor reads one (cut at link targets), read once
   let shown: Said[] | undefined;
   const givenElsewhere = (index: number, { anchor, words }: Anchor) => (shown ??= parsed.map((turns, at) =>
@@ -1219,7 +1222,7 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
       const found = answerAnchor(text);
       return found !== null && displays.some((display) => display.includes(found.anchor))
         && (wholeBlocks.some((block) => found.whole.test(block))
-          || (candidate.path === footedOwner && collapsed(text) === footed!.text)) ? [found] : [];
+          || (candidate.path === footedOwner && collapsed(displayedStrong(text)) === footed!.text)) ? [found] : [];
     });
     if (anchors.length === 0) continue;
     if (!scrutinized.has(candidate.path) || anchors.some((anchor) => !givenElsewhere(index, anchor))) matching.add(candidate.path);

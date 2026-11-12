@@ -784,6 +784,9 @@ describe("Codex rollout resolution", () => {
     // nor while another candidate's last turn may be the one shown, read loosely: the pane's own with an answer
     // Codex rendered its own way, a prompt the read cut off, or a turn steered with another message
     const rendered = said("own-bold", ...turn("r1", asked, recordedAnswer.replace("31 Frostwake", "**31 Frostwake**")));
+    expect(matchCodexTranscript(recordedScreen, [rendered])).toBe("own-bold");
+    expect(matchCodexTranscript(recordedScreen, [said("wrong-bold", ...turn("r1", "Another question", recordedAnswer.replace("31 Frostwake", "**31 Frostwake**")))])).toBeNull();
+    expect(matchCodexTranscript(recordedScreen, [said("unfinished-bold", message("assistant", recordedAnswer.replace("31 Frostwake", "**31 Frostwake**")))])).toBeNull();
     expect(matchCodexTranscript(recordedScreen, [rendered, said("plain-twin", ...turn("r2", asked, recordedAnswer))])).toBeNull();
     const coded = said("own-code", ...turn("r3", asked, recordedAnswer.replace("31 Frostwake", "`31 Frostwake`")));
     expect(matchCodexTranscript(recordedScreen, [coded, said("plain-twin", ...turn("r2", asked, recordedAnswer))])).toBeNull();

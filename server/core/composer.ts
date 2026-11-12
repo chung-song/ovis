@@ -25,7 +25,7 @@ import { type PendingIdentity, PendingInputError } from "../pending-input.ts";
 import { startOpenCodeWatch, openCodeSkillsToType, skillsNotAttached } from "../opencode-native.ts";
 import { herdrSkillAttachIo, type SkillAttachIo, typeWithSkills } from "../opencode-skill-attach.ts";
 import { userHome } from "../user-home.ts";
-import { inputRowState, readsTypedDraft, screenFromAnsi, typedDraft } from "../../shared/input-row.ts";
+import { drawsColour, inputRowState, readsTypedDraft, screenFromAnsi, typedDraft } from "../../shared/input-row.ts";
 
 const CLAUDE_INPUT_DRAFT_MESSAGE = "Claude Code's input box is not empty (a draft, bash mode, or a box that could not be read); send or clear it in the terminal, then send this message";
 
@@ -288,7 +288,7 @@ export async function freeAgentInput(paneId: string, agent: string | null, ident
     const colors = (await paneRead({ paneId, source: "visible", format: "ansi" })).text;
     const live = (await paneRead({ paneId, source: "detection", format: "text" })).text;
     if (codexScreens && codexOwnScreenOpen(live)) throw new HerdrError("agent_blocked", CODEX_OWN_SCREEN_MESSAGE);
-    if (!colors.includes("\u001b[")) return;
+    if (!drawsColour(colors)) return;
     if (screenText(colors) !== screenText(live)) continue;
     const screen = screenFromAnsi(colors);
     // herdr labels an OmO `pi`: OmO's box where it is drawn is the typing agent's, with no process read to tell them apart
@@ -696,8 +696,16 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
         // the last read before herdr is written to: one of Codex's own screens gets no paste and no Enter
         // and what a person typed into the agent's own box, which the paste would join (Claude's and Hermes' were read
         // above): for Codex both on the same last read
-        if (pane && !claude && !hermes && readsTypedDraft(agent)) {
-          await freeAgentInput(paneId, agent, identity ?? undefined, agent === "codex");
+        // an OmO herdr labels `claude` (its Claude SDK child) is found by the process holding its session, as for what is typed
+        let boxAgent = agent;
+        if (pane && !claude && agent === "claude") {
+          const roots = await paneProcessRoots(pane.pane_id, agent);
+          seen ??= roots.processes;
+          boxAgent = resolveAgent(pane, typingRoots(roots)).agent;
+          inTime();
+        }
+        if (pane && !claude && !hermes && readsTypedDraft(boxAgent)) {
+          await freeAgentInput(paneId, boxAgent, identity ?? undefined, boxAgent === "codex");
           inTime();
         } else if (agent === "codex") await freeCodexInput(paneId);
         const watch = pane ? startOpenCodeWatch(pane, command, options.openCodeStateDir) : null;

@@ -29,6 +29,9 @@ async function drain({ after = () => {}, afterPaste = () => {}, mode = "gjc", ta
   /** how many more messages are queued behind the first */ behind?: number }) {
   spyOn(pi, "piTranscriptPath").mockResolvedValue(null);
   if (mode === "claude") { spyOn(claude, "claudeForegroundSession").mockResolvedValue("session-a"); spyOn(composer, "freeClaudeBox").mockResolvedValue(undefined as never); }
+  // the skill mode's pane runs gjc, whose box the send now reads first (composer.ts freeAgentInput): these tests count the
+  // skill key's own screen reads, so that check is left out here (agent-input-send.test.ts covers it)
+  if (mode === "skill") spyOn(composer, "freeAgentInput").mockResolvedValue(undefined);
   if (mode === "skill") { spyOn(prompt, "prepareCommandSend").mockReturnValue({} as never); spyOn(prompt, "bindCommandProcess").mockImplementation(() => {}); spyOn(opencode, "startOpenCodeWatch").mockReturnValue(null); }
   const shown: Pane = { birth: 1_000 as number | null, screen, foreground: [{ pid: 41001, name: "gjc", argv: ["gjc"] }] };
   spyOn(processStart, "processStartedAtAsync").mockImplementation(async () => shown.birth);

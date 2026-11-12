@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { FrameGate, inputRowState, readScreen, readScreenLines, readsInputRow, type InputRowState, type ScreenSnapshot } from "./inputRow.ts";
 import { matchHerdrWidths } from "./terminalWidths.ts";
-import { screenFromAnsi, typedDraft } from "../../shared/input-row.ts";
+import { drawsColour, screenFromAnsi, typedDraft } from "../../shared/input-row.ts";
 import { SCREEN_AUTO_RETURN, watchReturn } from "./terminalPeek.ts";
 
 // Recorded screens and frames (src/lib/fixtures-input-rows/README.md; kept out of server/ so remote bundles do not carry them), fed through the real xterm
@@ -478,6 +478,16 @@ describe("the chat send's read of the same screens (shared/input-row.ts)", () =>
     const indented = readFileSync(join(FIXTURES, "pi/draft-typed-119.ansi"), "utf8").replace("leftover draft", "  indented snippet");
     expect(typedDraft("pi", screenFromAnsi(indented))).toBeTrue();
     expect(inputRowState("pi", screenFromAnsi(indented))).toBe("gone");
+    // a short dialog's rows, its select cursor or search field, are none
+    for (const row of ["  → Auto-compact                 true", "> search"]) {
+      expect(typedDraft("pi", screenFromAnsi(readFileSync(join(FIXTURES, "pi/draft-typed-119.ansi"), "utf8").replace("leftover draft", row)))).toBeFalse();
+    }
+  });
+
+  test("a read whose escapes carry no colour or style (bold, resets) proves nothing", () => {
+    const colourless = readFileSync(join(FIXTURES, "pi/draft-typed-119.ansi"), "utf8").replace(/\u001b\[(?:[0-9;:]*)m/g, "\u001b[0m\u001b[1m");
+    expect(drawsColour(colourless)).toBeFalse();
+    expect(drawsColour(readFileSync(join(FIXTURES, "pi/draft-typed-119.ansi"), "utf8"))).toBeTrue();
   });
 
   test("loads and reads a screen where the runtime has no Intl.Segmenter (Safari 14, Firefox before 125)", async () => {

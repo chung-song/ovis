@@ -206,8 +206,9 @@ export const piInputRow: InputRowRecognizer = (screen, typed) => {
   const inner = Array.from({ length: lower - upper - 1 }, (_, offset) => text(upper + 1 + offset));
   if (inner.length === 1 && inner[0]!.trim() === "") return "ready";
   // the draft check (`typed` given) also takes rows typed with leading spaces (an indented snippet); the peek
-  // reads such rows as a dialog's, and keeps doing so
-  if (inner.length > 0 && inner.length <= 6 && (typed !== undefined || inner.every((row) => !row.startsWith("  ")))
+  // reads such rows as a dialog's, and keeps doing so; a row with a dialog's select cursor (`→ `) or search field (`> `) is none
+  if (inner.length > 0 && inner.length <= 6
+    && (typed === undefined ? inner.every((row) => !row.startsWith("  ")) : !inner.some((row) => /^\s*(?:→ |> )/.test(row)))
     && inner.some((row) => row.trim() !== "") && !inner.some((row) => row.trim() === ">")) {
     for (let index = upper + 1; index < lower; index++) typed?.push(...screen.rows[index]!.cells);
     return "draft";
@@ -476,6 +477,17 @@ export function typedDraft(agent: string | null | undefined, screen: ScreenSnaps
   const colours = TYPED_COLOURS[agent!] ?? [];
   return typed.some((cell) => !blank(cell) && !cell.dim && !cell.italic && !cell.inverse
     && (cell.fgDefault || (cell.fg !== undefined && colours.includes(cell.fg))));
+}
+
+/** Whether a screen read carries any colour or text style (SGR 2, 3, 7, a foreground or background colour): without one nothing is told from a placeholder. */
+export function drawsColour(text: string): boolean {
+  for (const match of text.matchAll(/\u001b\[([0-9;:]*)m/g)) {
+    for (const parameter of (match[1] || "0").split(";")) {
+      const code = Number(parameter.split(":")[0] || 0);
+      if ([2, 3, 7].includes(code) || (code >= 30 && code <= 38) || (code >= 40 && code <= 48) || (code >= 90 && code <= 97) || (code >= 100 && code <= 107)) return true;
+    }
+  }
+  return false;
 }
 
 const ESCAPE = /\u001b(?:\[([0-?]*)[ -/]*([@-~])|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[@-Z\\-_])/g;

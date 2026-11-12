@@ -56,10 +56,10 @@ try {
   assert.equal(await drawer.getAttribute("aria-modal"), null, "a closed drawer is not modal");
   // modal or not, the drawer follows the finger: a swipe in from the left edge opens it, a swipe back closes it
   const cdp = await context.newCDPSession(page);
-  const swipe = async (from: number, to: number): Promise<void> => {
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from, y: 420 }] });
+  const swipe = async (from: number, to: number, fromY = 420, toY = fromY): Promise<void> => {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from, y: fromY }] });
     for (let step = 1; step <= 12; step++) {
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: from + ((to - from) * step) / 12, y: 420 }] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: from + ((to - from) * step) / 12, y: fromY + ((toY - fromY) * step) / 12 }] });
     }
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   };
@@ -70,11 +70,53 @@ try {
   await page.locator("#workspace-drawer:not(.is-open)").waitFor();
   assert.equal(await drawer.getAttribute("aria-modal"), null, "a drawer swiped closed is not modal");
   assert.equal(await drawer.getAttribute("aria-owns"), null, "a closed drawer owns nothing of the header");
+  // Observe the browser's real events after the drawer's capture listener: a claimed move is
+  // cancelled before it reaches the pane. A diagonal stroke must remain the browser's to scroll.
+  await page.evaluate(() => {
+    const moves: { trusted: boolean; cancelled: boolean; drawerMoved: boolean }[] = [];
+    Object.assign(window, { drawerTouchMoves: moves });
+    document.addEventListener("touchmove", (event) => {
+      moves.push({ trusted: event.isTrusted, cancelled: event.defaultPrevented,
+        drawerMoved: (document.getElementById("workspace-drawer")?.style.transform ?? "") !== "" });
+    }, { capture: true, passive: true });
+  });
+  const moves = () => page.evaluate(() => (window as unknown as { drawerTouchMoves: { trusted: boolean; cancelled: boolean; drawerMoved: boolean }[] }).drawerTouchMoves.splice(0));
+  await swipe(170, 370);
+  await page.locator("#workspace-drawer.is-open[aria-modal='true']").waitFor();
+  assert.equal(await ringless(), true, "a drawer opened from mid-screen keeps its modal focus");
+  const openingMoves = await moves();
+  assert.ok(openingMoves.some((move) => move.trusted && move.cancelled), "the drawer cancels native mid-screen opening moves");
+  await swipe(300, 10);
+  await page.locator("#workspace-drawer:not(.is-open)").waitFor();
+  await moves();
+  await page.waitForFunction(() => (document.querySelector(".chat-view")?.scrollTop ?? 0) > 0);
+  const scrollBefore = await page.locator(".chat-view").evaluate((node) => node.scrollTop);
+  assert.ok(scrollBefore > 0, "the demo transcript has earlier content to scroll to");
+  await swipe(170, 240, 240, 420);
+  assert.equal(await drawer.getAttribute("aria-modal"), null, "a diagonal mid-screen stroke leaves the drawer closed");
+  const diagonalMoves = await moves();
+  assert.ok(diagonalMoves.some((move) => move.trusted), "the diagonal test dispatched native touch moves");
+  assert.ok(diagonalMoves.every((move) => !move.cancelled), "a diagonal stroke is not cancelled by the drawer");
+  await page.waitForFunction((before) => (document.querySelector(".chat-view")?.scrollTop ?? before) < before, scrollBefore);
+  await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
+  await page.waitForFunction(() => (document.querySelector("#workspace-drawer")?.getBoundingClientRect().left ?? -1) >= -0.5);
+  const divider = page.getByRole("separator", { name: "Resize PCs and Agents", exact: true });
+  const box = await divider.boundingBox();
+  assert.ok(box, "the real sidebar split divider is visible");
+  await moves();
+  await swipe(box.x + box.width - 20, box.x + 20, box.y + box.height / 2);
+  assert.equal(await drawer.getAttribute("aria-modal"), "true", "a leftward divider drag keeps the drawer open");
+  const dividerMoves = await moves();
+  assert.ok(dividerMoves.some((move) => move.trusted), "the divider test dispatched native touch moves");
+  assert.ok(dividerMoves.every((move) => !move.drawerMoved), "a divider drag never takes hold of the drawer");
+  assert.equal(await drawer.evaluate((node) => (node as HTMLElement).style.transform), "", "a divider drag does not move the drawer under the finger");
+  await page.keyboard.press("Escape");
+  await page.locator("#workspace-drawer:not(.is-open)").waitFor();
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator("#workspace-drawer:not([role])").waitFor();
   assert.equal(await drawer.getAttribute("aria-modal"), null, "the desktop sidebar is not modal");
   await context.close();
-  console.log("PASS phone drawer is a modal focus-trapped surface");
+  console.log("PASS phone drawer is a modal focus-trapped surface; native mid-screen opening cancels moves, diagonal scrolling and divider drags stay with their targets");
 } finally {
   await browser.close();
   server.stop(true);

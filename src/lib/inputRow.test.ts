@@ -478,10 +478,12 @@ describe("the chat send's read of the same screens (shared/input-row.ts)", () =>
     const indented = readFileSync(join(FIXTURES, "pi/draft-typed-119.ansi"), "utf8").replace("leftover draft", "  indented snippet");
     expect(typedDraft("pi", screenFromAnsi(indented))).toBeTrue();
     expect(inputRowState("pi", screenFromAnsi(indented))).toBe("gone");
-    // a short dialog's rows, its select cursor or search field, are none
-    for (const row of ["  → Auto-compact                 true", "> search"]) {
-      expect(typedDraft("pi", screenFromAnsi(readFileSync(join(FIXTURES, "pi/draft-typed-119.ansi"), "utf8").replace("leftover draft", row)))).toBeFalse();
-    }
+    const typedRow = (row: string): boolean => typedDraft("pi", screenFromAnsi(readFileSync(join(FIXTURES, "pi/draft-typed-119.ansi"), "utf8").replace("leftover draft", row)));
+    // a draft starting with a Markdown quote or an arrow is still one
+    expect(typedRow("> please retain this quote")).toBeTrue();
+    expect(typedRow("→ note to self")).toBeTrue();
+    // a dialog's search field typed into, over its select cursor, is none
+    expect(typedRow("> sea\r\n\u001b[38;2;167;152;215m→ Auto-compact\u001b[0m")).toBeFalse();
   });
 
   test("a read whose escapes carry no colour or style (bold, resets) proves nothing", () => {
@@ -502,12 +504,20 @@ describe("the chat send's read of the same screens (shared/input-row.ts)", () =>
   });
 
   test.each([
-    // `/mo` typed with the command list open: its box still drawn whole (gjc, qwen, cline), or pushed out of its place (muse, dsh-tui)
-    ["gjc", true], ["muse", false], ["qwen", true], ["cline", true], ["dsh-tui", false],
+    // `/mo` typed with the command list open: read with the list inside the box (muse), the box still whole (gjc, qwen,
+    // cline), or the box out of its place (dsh-tui)
+    ["gjc", true], ["muse", true], ["qwen", true], ["cline", true], ["dsh-tui", false],
   ])("%s, recorded in the agent lab: typed text is a draft, its empty box and placeholder are not", (agent, slash) => {
     expect(typed(agent, `${agent}/draft-typed-119.ansi`)).toBeTrue();
     expect(typed(agent, `${agent}/draft-empty-119.ansi`)).toBeFalse();
     expect(typed(agent, `${agent}/draft-slash-119.ansi`)).toBe(slash);
+  });
+
+  test("a draft wrapped onto a second row of the box is read whole", () => {
+    const rows = readFileSync(join(FIXTURES, "muse/draft-typed-119.ansi"), "utf8").replace("leftover draft", "").split("\n");
+    const at = rows.findIndex((row) => row.includes("\u276f"));
+    rows.splice(at + 1, 0, "\u001b[38;2;204;211;219mtyped on the second row\u001b[0m\r");
+    expect(typedDraft("muse", screenFromAnsi(rows.join("\n")))).toBeTrue();
   });
 
   test("an agent that draws typed text in a colour of its own: only that colour, as recorded, is typed", () => {

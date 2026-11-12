@@ -8,7 +8,7 @@ import { withoutTrailingBreaks } from "../../shared/launch-rules.ts";
 import { stripVTControlCharacters } from "node:util";
 import type { HerdrPane } from "../../shared/protocol.ts";
 import { displayWidth, secretPrompt } from "../../shared/secret-prompt.ts";
-import { NO_AGENT_MESSAGE } from "../../shared/submit-outcome.ts";
+import { AGENT_INPUT_DRAFT_MESSAGE, NO_AGENT_MESSAGE } from "../../shared/submit-outcome.ts";
 import { agentPrompt, HerdrError, paneGet, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
 import { mirrorInput } from "../mirror-input.ts";
 import { paneAgentOf, resolveAgent, typingRoots } from "../pane-context.ts";
@@ -31,7 +31,6 @@ const CLAUDE_INPUT_DRAFT_MESSAGE = "Claude Code's input box is not empty (a draf
 
 const HERMES_INPUT_DRAFT_MESSAGE = "Hermes' input in the terminal is not empty (a draft, or an input that could not be read); send or clear it there, then send this message";
 
-const AGENT_INPUT_DRAFT_MESSAGE = "The agent's input box in the terminal holds typed text; send or clear it there, then send this message";
 
 /**
  * input_draft, naming the one-row draft the chat may offer to clear (claudeClearableDraft), or none.
@@ -505,7 +504,9 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
             throw new HerdrError("pending_target_changed", "The refused message's Claude terminal or session changed; nothing was sent");
           }
         }
-        const claudeRoots = await paneRootsAs(pane, "claude");
+        // read once for a pane herdr labels claude: Claude Code's own roots, or an OmO's (its Claude SDK child) for its box check below
+        const labelledClaude = pane && resolveAgent(pane).agent === "claude" ? await paneProcessRoots(pane.pane_id, "claude") : null;
+        const claudeRoots = labelledClaude && resolveAgent(pane!, typingRoots(labelledClaude)).agent === "claude" ? labelledClaude : null;
         const claude = claudeRoots !== null;
         seen = claudeRoots?.processes;
         // the process lookup waited on herdr: the device may have lost its access meanwhile
@@ -697,13 +698,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
         // and what a person typed into the agent's own box, which the paste would join (Claude's and Hermes' were read
         // above): for Codex both on the same last read
         // an OmO herdr labels `claude` (its Claude SDK child) is found by the process holding its session, as for what is typed
-        let boxAgent = agent;
-        if (pane && !claude && agent === "claude") {
-          const roots = await paneProcessRoots(pane.pane_id, agent);
-          seen ??= roots.processes;
-          boxAgent = resolveAgent(pane, typingRoots(roots)).agent;
-          inTime();
-        }
+        const boxAgent = pane && labelledClaude && !claude ? resolveAgent(pane, typingRoots(labelledClaude)).agent : agent;
         if (pane && !claude && !hermes && readsTypedDraft(boxAgent)) {
           await freeAgentInput(paneId, boxAgent, identity ?? undefined, boxAgent === "codex");
           inTime();

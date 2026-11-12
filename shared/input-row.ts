@@ -205,10 +205,11 @@ export const piInputRow: InputRowRecognizer = (screen, typed) => {
   if (upper === undefined) return "gone";
   const inner = Array.from({ length: lower - upper - 1 }, (_, offset) => text(upper + 1 + offset));
   if (inner.length === 1 && inner[0]!.trim() === "") return "ready";
-  // the draft check (`typed` given) also takes rows typed with leading spaces (an indented snippet); the peek
-  // reads such rows as a dialog's, and keeps doing so; a row with a dialog's select cursor (`→ `) or search field (`> `) is none
+  // the draft check (`typed` given) also takes rows typed with leading spaces (an indented snippet), which the peek
+  // reads as a dialog's, and keeps doing so; only a dialog's search field (`> `) over its select cursor (`→ `) is none
+  const dialog = inner.some((row) => /^\s*→ /.test(row)) && inner.some((row) => /^\s*>(?: |$)/.test(row));
   if (inner.length > 0 && inner.length <= 6
-    && (typed === undefined ? inner.every((row) => !row.startsWith("  ")) : !inner.some((row) => /^\s*(?:→ |> )/.test(row)))
+    && (typed === undefined ? inner.every((row) => !row.startsWith("  ")) : !dialog)
     && inner.some((row) => row.trim() !== "") && !inner.some((row) => row.trim() === ">")) {
     for (let index = upper + 1; index < lower; index++) typed?.push(...screen.rows[index]!.cells);
     return "draft";
@@ -407,7 +408,13 @@ export function inputRowState(agent: string | null | undefined, screen: ScreenSn
 // Recorded 2026-11-12 in the agent lab (src/lib/fixtures-input-rows/README.md): empty, typed into, and with
 // their command list open. Each reports only the box's row, and only when the box is drawn whole.
 
-/** the box's row, `mark` at its start (after any indent), between the rows `above` and `below` matched as its borders */
+/** how many rows a draft may wrap onto under the box's first row before the box is taken as not made out */
+const BOX_MAX_ROWS = 8;
+
+/**
+ * The box's rows: `mark` at the start of its first (after any indent), the row `above` it a border, and its
+ * draft's wrapped rows down to the row `below` matched as the other border, at most BOX_MAX_ROWS of them.
+ */
 function boxRow(screen: ScreenSnapshot, mark: RegExp, above: RegExp, below: RegExp, typed: ScreenCell[] | undefined): InputRowState {
   const rows = filled(screen);
   const text = (index: number): string => screen.rows[index]!.text;
@@ -415,9 +422,11 @@ function boxRow(screen: ScreenSnapshot, mark: RegExp, above: RegExp, below: RegE
     const index = rows[position]!;
     const found = mark.exec(text(index));
     if (!found) continue;
-    const next = rows[position + 1];
-    if (!above.test(text(rows[position - 1]!)) || next === undefined || !below.test(text(next))) return "gone";
-    const cells = cellsFrom(screen.rows[index]!, Array.from(found[0]).length).filter((cell) => cell.char !== "│");
+    if (!above.test(text(rows[position - 1]!))) return "gone";
+    const end = rows.slice(position + 1, position + 1 + BOX_MAX_ROWS).findIndex((row) => below.test(text(row)));
+    if (end < 0) return "gone";
+    const cells = [cellsFrom(screen.rows[index]!, Array.from(found[0]).length), ...rows.slice(position + 1, position + 1 + end).map((row) => screen.rows[row]!.cells)]
+      .flat().filter((cell) => cell.char !== "│");
     if (cells.every(blank)) return "ready";
     typed?.push(...cells);
     return "draft";

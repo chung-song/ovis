@@ -24,11 +24,12 @@ import { mergeEnvLayers } from "../server/legacy-env.ts";
 import { acquireOwnerDirectory, guardPath, type OwnerLease } from "../server/owner-guard.ts";
 import { parseBirth, readProcessBirth } from "../server/process-owner.ts";
 import { defaultStateDir } from "../server/update-state.ts";
-import { entryCommand, ROOT as SERVER_ROOT } from "../server/entries.ts";
+import { COMPILED, entryCommand, ROOT as SERVER_ROOT } from "../server/entries.ts";
+import { version as builtVersion } from "../package.json";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform, uptime } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 
 import qrcode from "qrcode-generator";
 
@@ -38,6 +39,7 @@ import type { RemoteAccess } from "../shared/protocol.ts";
 import { canServe, FALLBACK_PORTS, freePort, savedPort } from "./plugin-port.ts";
 import { approveWaiting, COMMAND_ALIASES, discardTyped, link as linkPc, type WaitingDevice } from "./plugin-link.ts";
 import { activePluginScript } from "./plugin-runtime.ts";
+import { runTui } from "./plugin-tui.ts";
 import { accountServiceOrigin, DEFAULT_ACCOUNT_SERVICE } from "../server/static.ts";
 import { herdrStateDir } from "./plugin-state.ts";
 import { HTTPS_PORT_VARIABLE, HTTPS_PORTS, httpsPorts, parseTailscale, parseTailscaleIp, parseTailscaleOwner, readTailscale, tailscaleBinary } from "../server/tailscale.ts";
@@ -658,6 +660,22 @@ const stopDependencies: StopDependencies = {
  * checkout's lock until the bridge under it exits, and a `start` before then finds that lock,
  * gives up, and leaves nothing running.
  */
+/**
+ * Whether a process (its executable and argv) is this plugin's server in either of the forms it runs in: the form this
+ * process would start, Bun running the plugin checkout's server/managed.ts (from source, as before the compiled server),
+ * or the checkout's installed ovis-server(.exe) running its managed entry (scripts/plugin-launch.ts). So a stop run by
+ * one form finds the server the other started, as after herdr plugin update moved the plugin to the binary.
+ */
+export function startedByThisPlugin(path: string, argv: string[], env: Record<string, string | undefined> = process.env): boolean {
+  const same = (left: string | undefined, right: string) => left?.toLowerCase() === right.toLowerCase();
+  if (same(path, process.execPath) && same(argv[1], entryCommand("managed", ROOT)[1])) return true;
+  const checkout = env["OVIS_PLUGIN_CHECKOUT"] ?? env["HERDR_PLUGIN_ROOT"];
+  if (!checkout) return false;
+  if (same(argv[1], join(checkout, "server", "managed.ts")) && /^bun(\.exe)?$/i.test(basename(path))) return true;
+  const installed = `${join(checkout, ".ovis", "server").toLowerCase()}${sep}`;
+  return argv[1] === "managed" && path.toLowerCase().startsWith(installed) && /^ovis-server(\.exe)?$/i.test(basename(path));
+}
+
 export async function stop(dependencies: StopDependencies = stopDependencies): Promise<number> {
   // no start made the dir, and no server runs under the old id's: nothing to stop
   if (!existsSync(REQUESTED_STATE_DIR) && recordedPid() === null) {
@@ -678,6 +696,15 @@ export async function stop(dependencies: StopDependencies = stopDependencies): P
   }
 }
 
+/** The creation time (ms) `start` recorded on Windows for the server under `pid`, or null when it kept none for it. */
+function recordedWindowsBirth(pid: number): number | null {
+  try {
+    const owner = JSON.parse(readFileSync(OWNER_FILE, "utf8")) as { pid?: unknown; birth?: unknown };
+    const birth = parseBirth(owner.birth);
+    return owner.pid === pid && birth?.platform === "win32" ? Number(birth.value) : null;
+  } catch { return null; }
+}
+
 async function stopInTurn(dependencies: StopDependencies): Promise<number> {
   const pid = recordedPid();
   if (pid === null) {
@@ -692,10 +719,16 @@ async function stopInTurn(dependencies: StopDependencies): Promise<number> {
     const recordedAt = statSync(PID_FILE).mtimeMs;
     const processes = await dependencies.processTable();
     const owner = processes.find(row => row.pid === pid);
-    const argv = windowsArgv(owner?.commandLine ?? "");
-    if (owner?.path?.toLowerCase() !== process.execPath.toLowerCase()
-      || argv[1]?.toLowerCase() !== entryCommand("managed", ROOT)[1].toLowerCase()
-      || owner.started === undefined || owner.started > recordedAt
+    // The identity start recorded (the pid and the creation time Windows gives it) decides, whichever installation
+    // folder runs this stop: herdr plugin update builds the new version in a new one while the old server runs on. A
+    // record without a birth (none could be read) falls back to the server's form and folder.
+    const birth = recordedWindowsBirth(pid);
+    // An exact creation-time match decides alone, as on Linux. Without one, the process must also have started
+    // before its pid record was written (a record older than it is not its own).
+    const identified = owner?.started !== undefined && (birth !== null
+      ? owner.started === birth
+      : owner.started <= recordedAt && startedByThisPlugin(owner.path ?? "", windowsArgv(owner.commandLine ?? "")));
+    if (!owner || !identified
       || !existsSync(PID_FILE) || statSync(PID_FILE).mtimeMs !== recordedAt
       || Number(readFileSync(PID_FILE, "utf8").trim()) !== pid) {
       process.stderr.write("could not verify the recorded Ovis process; it was left running and its pid file was kept\n");
@@ -903,9 +936,11 @@ async function linkCommand(): Promise<number> {
     // Ctrl+C reaches the release's link too, which takes its code back; this one waits for it.
     // Always "link", whichever name it was run by: a release from before `add` and `login` knows only that one
     process.on("SIGINT", () => undefined);
-    const child = Bun.spawn([process.execPath, active, "link", ...process.argv.slice(3)], { cwd: ROOT, windowsHide: true, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-    // a SIGTERM or SIGHUP sent to this process alone is passed on, so the release takes its code back too
+    // a SIGTERM or SIGHUP sent to this process alone is passed on, so the release takes its code back too.
+    // Listening starts before the release does, so a signal that comes while it starts no longer ends this
+    // process with the release left running: Bun runs the listener from the event loop, after `child` is set.
     for (const signal of ["SIGTERM", "SIGHUP"] as const) process.on(signal, () => child.kill(signal));
+    const child = Bun.spawn([process.execPath, active, "link", ...process.argv.slice(3)], { cwd: ROOT, windowsHide: true, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     return await child.exited;
   }
   if (!(await health())) {
@@ -1053,9 +1088,11 @@ async function phoneSetup(): Promise<number> {
 /**
  * The version that runs, or runs at the next start: the release Settings → Updates installed, else
  * this checkout. herdr's plugin list names only the checkout's, which keeps the version first
- * installed, so Ovis for Windows reads this line to tell an old server from an updated one.
+ * installed, so Ovis for Windows reads this line to tell an old server from an updated one. The compiled server has
+ * no package.json beside it: it is the version compiled into it (updates stay unmanaged there for now).
  */
 function runningVersion(): string | null {
+  if (COMPILED) return builtVersion;
   try {
     const version = (JSON.parse(readFileSync(join(dirname(activePluginScript(ROOT, port, APP_STATE_DIR)), "..", "package.json"), "utf8")) as { version?: unknown }).version;
     return typeof version === "string" ? version : null;
@@ -1084,11 +1121,22 @@ export async function runPlugin(): Promise<void> {
   else if (command === "link") process.exit(await linkCommand());
   else if (command === "phone") process.exit(await phone());
   else if (command === "phone-setup") process.exit(await phoneSetup());
+  else if (command === "tui") process.exit(await runTui(process.argv.slice(3), { platform: platform(), where: { root: ROOT, home: homedir() }, caller: process.env, settings: env, err: (text) => process.stderr.write(text), on: (signal, handler) => process.on(signal, handler) }));
   else {
+    // a launcher runs the checkout's own script, which stays at the version first installed: a
+    // command it does not know may be one of the release Settings → Updates installed since
+    const active = activePluginScript(ROOT, port, APP_STATE_DIR);
+    if (active !== join(resolve(ROOT), "scripts", "plugin.ts") && resolve(active) !== resolve(import.meta.filename)) {
+      process.on("SIGINT", () => undefined);
+      const child = Bun.spawn([process.execPath, active, ...process.argv.slice(2)], { cwd: ROOT, windowsHide: true, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+      for (const signal of ["SIGTERM", "SIGHUP"] as const) process.on(signal, () => child.kill(signal));
+      process.exit(await child.exited);
+    }
     process.stderr.write([
-      "usage: bun scripts/plugin.ts <start|stop|status|pair|link|add|login|phone|phone-setup>",
+      "usage: bun scripts/plugin.ts <start|stop|status|pair|link|add|login|phone|phone-setup|tui>",
       "add (also login, link): sign this PC in, then scan its QR code with a device of your Ovis account to add it (--approve: approve that device here instead; --print: write the QR code where there is no terminal).",
       "link --code: show a code and a QR code to pair one device instead.",
+      "tui: herdr-core's terminals in this terminal, as herdr shows them.",
       "",
     ].join("\n"));
     process.exit(2);

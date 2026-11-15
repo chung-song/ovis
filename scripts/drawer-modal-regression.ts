@@ -30,13 +30,31 @@ try {
   // The demo returns its own socket class, so capture each instance before the app attaches.
   // This records real client input without sending anything to a user's terminal.
   await context.addInitScript(() => {
-    const probe = { wheels: 0, ends: 0, claims: 0, inputs: [] as string[], socket: null as unknown as WebSocket & { push(message: unknown): void } };
+    const probe = { wheels: 0, ends: 0, claims: 0, inputs: [] as string[], holdReceipts: new URL(location.href).searchParams.has("drawer_receipt"), receipts: [] as unknown[], socket: null as unknown as WebSocket & { push(message: unknown): void } };
     Object.assign(window, { drawerInputProbe: probe });
+    if (probe.holdReceipts) {
+      let fetchDemo = window.fetch;
+      Object.defineProperty(window, "fetch", { configurable: true, get: () => fetchDemo, set: (next: typeof fetch) => {
+        fetchDemo = async (input, init) => {
+          const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
+          if (url.pathname.endsWith("/pane/conversation")) return Response.json({ source: "scrollback", turns: [] });
+          if (url.pathname.endsWith("/pane/read")) return Response.json({ read: {
+            text: Array.from({ length: 160 }, (_, index) => `Receipt fixture line ${index}: a long transcript line above the latest output.`).join("\n"), truncated: false,
+          } });
+          return next.call(window, input, init);
+        };
+      } });
+    }
     let Constructor = window.WebSocket;
     Object.defineProperty(window, "WebSocket", { configurable: true, get: () => Constructor, set: (Demo: typeof WebSocket) => {
       Constructor = function (url: string | URL, protocols?: string | string[]) {
         const socket = new Demo(url, protocols);
         probe.socket = socket as typeof probe.socket;
+        const push = probe.socket.push.bind(probe.socket);
+        probe.socket.push = (message: unknown) => {
+          if (probe.holdReceipts && (message as { type?: string }).type === "submit-result") probe.receipts.push(message);
+          else push(message);
+        };
         const send = socket.send.bind(socket);
         socket.send = (raw) => {
           if (typeof raw === "string") {
@@ -62,10 +80,12 @@ try {
   await drawer.waitFor({ state: "visible" });
   assert.equal(await drawer.getAttribute("role"), "dialog", "the phone drawer exposes dialog semantics");
   assert.equal(await drawer.getAttribute("aria-modal"), "true", "the trapped phone drawer is modal");
-  // the header's toggle and + drawn as its top row belong to the modal for a screen reader too
+  // the header's toggle drawn as its top row belongs to the modal for a screen reader too; New workspace is the
+  // drawer's own (each PC's +, the lone Host's row), so the header draws no + over it
   const owned = (await drawer.getAttribute("aria-owns"))?.split(" ") ?? [];
-  assert.deepEqual(owned, ["drawer-toggle", "drawer-new-workspace"], "the open drawer owns the header's toggle and +");
+  assert.deepEqual(owned, ["drawer-toggle"], "the open drawer owns the header's toggle");
   for (const id of owned) assert.equal(await page.locator(`.app-header #${id}`).count(), 1, `the owned ${id} is the header's own control`);
+  assert.equal(await page.locator(".app-header .new-workspace-button").count(), 0, "the header draws no + over the open drawer");
   // a tap that opened it shows no focus ring: the drawer holds the focus itself, no control in it
   const ringless = () => page.evaluate(() => document.activeElement?.id === "workspace-drawer" && document.querySelector(":focus-visible:not(#workspace-drawer)") === null);
   assert.equal(await ringless(), true, "the opened drawer holds the focus itself, with no control's ring");
@@ -76,8 +96,8 @@ try {
   await page.keyboard.press("Tab");
   assert.equal(await page.evaluate(() => {
     const active = document.activeElement;
-    return active !== null && (active.matches(".drawer-toggle, .new-workspace-button") || active.closest("#workspace-drawer") !== null);
-  }), true, "Tab stays within the drawer and its header controls");
+    return active !== null && (active.matches(".drawer-toggle") || active.closest("#workspace-drawer") !== null);
+  }), true, "Tab stays within the drawer and the header's toggle");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Open workspace list", exact: true }).waitFor();
   assert.equal(await drawer.getAttribute("aria-modal"), null, "a closed drawer is not modal");
@@ -152,6 +172,49 @@ try {
   assert.ok(diagonalMoves.every((move) => !move.cancelled), "a diagonal stroke is not cancelled by the drawer");
   await page.waitForFunction((before) => (document.querySelector(".chat-view")?.scrollTop ?? before) < before, diagonalBefore);
   console.log("PASS native direction changes and chat scrolling");
+  // A delayed successful send receipt follows a scrollback chat with asynchronous smooth
+  // scrolling. Once the touch ended, that automatic movement must not close the drawer.
+  await page.goto(`http://127.0.0.1:${server.port}/?pane=w1J%3Ap1&view=chat&drawer_receipt=1`);
+  await page.locator(".conn-live").first().waitFor();
+  await page.locator(".chat-terminal-fallback > summary").click();
+  await page.waitForFunction(() => document.querySelector(".chat-terminal-snapshot pre")?.textContent?.includes("Receipt fixture line 159"));
+  await page.locator(".chat-view:not(.chat-view-virtual)").evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  await page.waitForFunction(() => (document.querySelector(".chat-view:not(.chat-view-virtual)")?.scrollTop ?? 0) > 0);
+  await page.getByRole("textbox", { name: "Message", exact: true }).fill("Drawer delayed receipt regression");
+  await page.locator(".chat-view").evaluate((node) => {
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, bubbles: true }));
+    node.scrollTop = (node.scrollHeight - node.clientHeight) / 2;
+  });
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  type ReceiptProbe = { holdReceipts: boolean; receipts: unknown[]; socket: { push(message: unknown): void } };
+  await page.waitForFunction(() => (window as unknown as { drawerInputProbe: ReceiptProbe }).drawerInputProbe.receipts.length > 0);
+  assert.equal(await page.evaluate(() => {
+    const probe = (window as unknown as { drawerInputProbe: ReceiptProbe }).drawerInputProbe;
+    return probe.receipts.every((message) => (message as { ok?: boolean; pending?: unknown }).ok === true && (message as { pending?: unknown }).pending === undefined);
+  }), true, "the held receipt is a successful immediate send, not a queued message");
+  const receiptBefore = await page.locator(".chat-view").evaluate((node) => {
+    return { top: node.scrollTop, gap: node.scrollHeight - node.clientHeight - node.scrollTop };
+  });
+  assert.ok(receiptBefore.gap > 100, "the reader remains above the end before the receipt");
+  await swipe(170, 300, 400);
+  await page.locator("#workspace-drawer.is-open").waitFor();
+  await page.evaluate(() => {
+    const tops: number[] = [];
+    Object.assign(window, { receiptScrollTops: tops });
+    document.querySelector(".chat-view")!.addEventListener("scroll", (event) => tops.push((event.target as HTMLElement).scrollTop));
+    const probe = (window as unknown as { drawerInputProbe: ReceiptProbe }).drawerInputProbe;
+    probe.holdReceipts = false;
+    for (const message of probe.receipts.splice(0)) probe.socket.push(message);
+  });
+  await page.waitForFunction(() => {
+    const node = document.querySelector(".chat-view")!;
+    return node.scrollHeight - node.clientHeight - node.scrollTop <= 1;
+  });
+  assert.ok(await page.locator(".chat-view").evaluate((node) => node.scrollTop) > receiptBefore.top, "the delayed receipt actually moved the scrollback chat to its end");
+  assert.ok(await page.evaluate(() => new Set((window as unknown as { receiptScrollTops: number[] }).receiptScrollTops).size) > 1, "the receipt exercised asynchronous smooth-scroll updates");
+  assert.equal(await drawer.getAttribute("aria-modal"), "true", "a late successful send receipt leaves the settled drawer open");
+  console.log("PASS a late send receipt smoothly follows scrollback without closing the settled drawer");
   // A turn upward after the opening threshold belongs to the held drawer, not to native chat
   // scrolling. Start in the middle: at the end an unlocked upward stroke could not scroll either.
   for (const ending of ["touchEnd", "touchCancel"] as const) {
@@ -255,8 +318,14 @@ try {
       await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: 270, y: 260 }] });
       await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     }
-    await page.locator("#workspace-drawer:not(.is-open)").waitFor({ state: "attached" });
-    assert.equal(await drawer.evaluate((node) => (node as HTMLElement).style.transform), "", `${phase} scrolling returns ownership to the page`);
+    if (phase === "released") {
+      await page.locator("#workspace-drawer.is-open").waitFor();
+      assert.equal(await drawer.getAttribute("aria-modal"), "true", "post-lift automatic scrolling is outside the ended touch stroke");
+      await page.keyboard.press("Escape");
+    } else {
+      await page.locator("#workspace-drawer:not(.is-open)").waitFor({ state: "attached" });
+    }
+    assert.equal(await drawer.evaluate((node) => (node as HTMLElement).style.transform), "", `${phase} scrolling releases the finger's inline transform`);
   }
   // Exercise the real conversation fetch -> React -> measured list -> automatic follow path.
   // Each update grows the same assistant row while native CDP touches remain down.
@@ -337,6 +406,7 @@ try {
   assert.equal(await drawer.getAttribute("aria-modal"), "true", "a slow short swipe from the right half stays open after release");
   await page.keyboard.press("Escape");
   await page.locator("#workspace-drawer:not(.is-open)").waitFor({ state: "attached" });
+  await page.waitForFunction(() => document.getElementById("workspace-drawer")!.getBoundingClientRect().right <= 0.5);
   // A diagonal drift before interior ownership must not become a terminal wheel on lift.
   // Enable SGR mouse reporting in the fixture so the actual input path is observable too.
   type InputProbe = { wheels: number; ends: number; claims: number; inputs: string[]; socket: { push(message: unknown): void } };
@@ -375,6 +445,7 @@ try {
     assert.equal(claimed.ends, 1, `${ending}: terminal still receives the ending for cleanup`);
     assert.equal(claimed.wheels, 0, `${ending}: no wheel escapes after ownership changes`);
     assert.deepEqual(claimed.inputs, [], `${ending}: no input reaches the fixture TUI`);
+    assert.equal(await page.locator(".pane-terminal").evaluate((node) => node.hasAttribute("data-touch-fling")), false, "a claimed drawer stroke never starts the terminal's glide");
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => (document.querySelector("#workspace-drawer")?.getBoundingClientRect().right ?? 1) <= 0.5);
     // Positive control: the next ordinary vertical stroke must still send terminal wheels.
@@ -385,8 +456,9 @@ try {
     assert.ok((await inputProbe()).inputs.some((text) => /\x1b\[<6[45];/.test(text)), "the next vertical stroke still sends a TUI mouse wheel");
     assert.equal(await drawer.getAttribute("aria-modal"), null, "ordinary vertical scrolling never opens the drawer");
   }
-  const beforePinch = await inputProbe();
   await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 150, y: 400, id: 1 }, { x: 210, y: 400, id: 2 }] });
+  // A positive control may still glide before this new touch. Measure only after touchdown stops it.
+  const beforePinch = await inputProbe();
   await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: 130, y: 400, id: 1 }, { x: 230, y: 400, id: 2 }] });
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   await page.waitForFunction(() => JSON.parse(localStorage.getItem("ovis:settings") ?? "{}").terminalFontSize > 13);

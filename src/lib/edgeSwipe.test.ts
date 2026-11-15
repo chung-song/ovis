@@ -71,7 +71,9 @@ describe("watchDrawerSwipe", () => {
     modal = null;
     selection = { isCollapsed: true };
     saved = { window: (globalThis as Record<string, unknown>)["window"], document: (globalThis as Record<string, unknown>)["document"] };
-    (globalThis as Record<string, unknown>)["window"] = { matchMedia: () => narrow };
+    (globalThis as Record<string, unknown>)["window"] = { matchMedia: () => narrow,
+      addEventListener: (type: string, handler: Handler) => listeners.set(`window:${type}`, handler),
+      removeEventListener: (type: string) => listeners.delete(`window:${type}`) };
     (globalThis as Record<string, unknown>)["document"] = {
       addEventListener: (type: string, handler: Handler) => listeners.set(type, handler),
       removeEventListener: (type: string) => listeners.delete(type),
@@ -167,9 +169,14 @@ describe("watchDrawerSwipe", () => {
   };
 
   test("only the committed interior opening locks scroll axes, then restores inline values and priorities", () => {
-    for (const ending of ["touchend", "touchcancel", "second-finger", "wide", "cleanup", "set-open-throws", "partial-lock-throws"] as const) {
+    for (const ending of ["touchend", "touchcancel", "second-finger", "wide", "cleanup", "set-open-throws", "partial-lock-throws", "hidden", "pagehide", "blur", "detached"] as const) {
       narrow.matches = true;
       const target = scrollTarget();
+      const originListeners = new Map<string, EventListener>();
+      if (ending === "detached") Object.assign(target, {
+        addEventListener: (type: string, handler: EventListener) => originListeners.set(type, handler),
+        removeEventListener: (type: string) => originListeners.delete(type),
+      });
       target.style.setProperty("overflow-x", "scroll", "important");
       target.style.setProperty("overflow-y", "auto");
       (document as unknown as { getElementById(): unknown }).getElementById = () => ({ style: {}, getBoundingClientRect: () => ({ width: 300 }) });
@@ -196,7 +203,17 @@ describe("watchDrawerSwipe", () => {
         listeners.get("touchmove")!(event(270));
         expect(target.style.getPropertyValue("overflow-x")).toBe("hidden");
         expect(target.style.getPropertyValue("overflow-y")).toBe("hidden");
-        if (ending === "cleanup") stop();
+        if (ending === "hidden") {
+          (document as unknown as { visibilityState: string }).visibilityState = "hidden";
+          listeners.get("visibilitychange")!({});
+        }
+        else if (ending === "pagehide" || ending === "blur") listeners.get(`window:${ending}`)!({});
+        else if (ending === "detached") {
+          Object.assign(target, { isConnected: false });
+          originListeners.get("touchend")!({ timeStamp: 400 } as Event);
+          expect(originListeners.size).toBe(0);
+        }
+        else if (ending === "cleanup") stop();
         else if (ending === "wide") { narrow.matches = false; listeners.get("media-change")!({}); }
         else if (ending === "second-finger") listeners.get("touchstart")!({ ...event(270), touches: [{ clientX: 270, clientY: 300 }, { clientX: 290, clientY: 300 }] });
         else listeners.get(ending)!({ touches: [], timeStamp: 400 });
@@ -317,7 +334,7 @@ describe("watchDrawerSwipe", () => {
     })).toEqual({ reached: 0, calls: [true] });
   });
 
-  test("a native scroll at lift or after lift cannot leave an interior drawer open", () => {
+  test("a native scroll at lift yields, but later receipt scrolls cannot close a settled drawer", () => {
     for (const phase of ["at-lift", "after-lift", "after-layout"] as const) {
       const target = scrollTarget();
       const drawer = { style: {}, getBoundingClientRect: () => ({ width: 300 }) };
@@ -338,12 +355,12 @@ describe("watchDrawerSwipe", () => {
         target.scrollTop -= 10;
         listeners.get("scroll")!({ target });
       }
-      expect(open).toBe(false);
+      expect(open).toBe(phase !== "at-lift");
       stop();
     }
   });
 
-  test("the next interaction releases the previous opening's origin", () => {
+  test("a new interaction does not attribute scrolling to an ended opening", () => {
     const target = scrollTarget();
     (document as unknown as { getElementById(): unknown }).getElementById = () => ({ style: {}, getBoundingClientRect: () => ({ width: 300 }) });
     let open = false;

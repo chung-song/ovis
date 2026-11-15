@@ -109,13 +109,6 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   type Stroke = { x: number; y: number; open: boolean; at: number; path: EventTarget[];
     scrolls: ReturnType<typeof scrollOrigins>; pageX: number; pageY: number };
   let start: Stroke | null = null;
-  // A last compositor update can arrive after lift. Keep that opening's origin until the next
-  // interaction or close, rather than guessing how many frames a phone will take to deliver it.
-  let settled: Stroke | null = null;
-  const observed = (): Stroke | null => {
-    if (settled && (!isOpen() || !narrow.matches)) settled = null;
-    return start ?? settled;
-  };
   // a recognised swipe owns the stroke until the finger lifts, after the drawer moved too
   let claimed = false;
   let done = false;
@@ -128,7 +121,7 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     restoreScroll = null;
     restore?.();
   };
-  const lockScroll = (origins: ReturnType<typeof scrollOrigins>): void => {
+  const lockScroll = (origins: ReturnType<typeof scrollOrigins>, target: EventTarget | undefined): void => {
     const saved: { style: CSSStyleDeclaration; property: string; value: string; priority: string }[] = [];
     for (const { node, x, y } of origins) {
       const style = node.style;
@@ -139,17 +132,21 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     }
     // Capture every original axis before changing a shorthand, and register restoration before
     // the first write so a partially applied lock that throws cannot leave a scroller locked.
+    const endAtOrigin: EventListener = (event) => { onEnd(event as TouchEvent); };
     restoreScroll = () => {
+      target?.removeEventListener?.("touchend", endAtOrigin, { capture: true });
+      target?.removeEventListener?.("touchcancel", endAtOrigin, { capture: true });
       for (const { style, property, value, priority } of saved) {
         if (value) style.setProperty(property, value, priority);
         else style.removeProperty(property);
       }
     };
+    target?.addEventListener?.("touchend", endAtOrigin, { capture: true, passive: true });
+    target?.addEventListener?.("touchcancel", endAtOrigin, { capture: true, passive: true });
     for (const { style, property } of saved) style.setProperty(property, "hidden", "important");
   };
   const onStart = (event: TouchEvent): void => {
     unlockScroll();
-    settled = null;
     const touch = event.touches[0];
     // the last stroke still holds the drawer: a second finger, or its end never came (the element
     // it began on left the page and took its touches with it). It lets go where it was first
@@ -166,7 +163,7 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     follow = null;
   };
   const pageScrolled = (): boolean => {
-    const stroke = observed();
+    const stroke = start;
     return stroke !== null && !stroke.open && stroke.x > EDGE_PX && (
     stroke.scrolls.some((origin) => {
       const { node } = origin;
@@ -214,7 +211,7 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
           // instant layout writes can still follow streaming text through overflow:hidden.
           const target = start.path.find((node) => (node as Node).isConnected !== false) ?? null;
           start.scrolls = scrollOrigins(target);
-          lockScroll(start.scrolls);
+          lockScroll(start.scrolls, start.path[0]);
           claimTouchStroke(start.path);
         }
         state = verdict === "open";
@@ -254,11 +251,9 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   /** Ends the stroke; returns what the drawer is set to now. */
   const onEnd = (event?: TouchEvent, forcedState?: boolean): boolean => {
     const held = follow;
-    const origin = start;
     try {
       if (forcedState === undefined && pageScrolled()) forcedState = false;
     } finally { unlockScroll(); }
-    settled = null;
     // Near the right edge there may be too little room to reveal half the drawer. Reaching
     // the interior opening threshold is enough, unless the finger flicked back to close it.
     const interiorOpening = start !== null && !start.open && start.x > EDGE_PX && held !== null && held.x - start.x >= SWIPE_PX;
@@ -276,7 +271,6 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     const open = forcedState ?? ((interiorOpening && speed > -FLING_SPEED) || drawerSettles(held.shown, held.width, speed));
     if (open !== state) setOpen(open);
     state = open;
-    if (open && interiorOpening) settled = origin;
     // the stylesheet's slide takes it from where the finger left it to where it settles
     held.drawer.style.transition = "";
     held.drawer.style.visibility = "";
@@ -284,18 +278,18 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     if (held.scrim !== null) { held.scrim.style.transition = ""; held.scrim.style.opacity = ""; }
     return open;
   };
-  // A compositor scroll may arrive after the move that took the drawer. Yield then too,
-  // rather than leave an open drawer in front of a transcript that is still scrolling.
+  // A compositor update can arrive after the claiming move. While held, actual movement
+  // still yields if the native lock failed. After lift, automatic receipts may scroll freely.
   const onScroll = (): void => { if (pageScrolled()) onEnd(undefined, false); };
   // Check first: a pending native scroll cannot be hidden by the layout's next absolute write.
   const onLayoutStart = (event: Event): void => {
-    const origin = observed()?.scrolls.find(({ node }) => node === event.target);
+    const origin = start?.scrolls.find(({ node }) => node === event.target);
     if (!origin) return;
     if (origin.depth === 0 && pageScrolled()) { onEnd(undefined, false); return; }
     origin.depth++;
   };
   const onLayoutEnd = (event: Event): void => {
-    const origin = observed()?.scrolls.find(({ node }) => node === event.target);
+    const origin = start?.scrolls.find(({ node }) => node === event.target);
     if (origin && origin.depth > 0 && --origin.depth === 0) {
       origin.top = origin.node.scrollTop;
       origin.left = origin.node.scrollLeft;
@@ -303,6 +297,11 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     }
   };
   const onWidthChange = (): void => { if (!narrow.matches) onEnd(); };
+  const onBackground = (): void => { onEnd(); };
+  const onVisibility = (): void => { if (document.visibilityState === "hidden") onEnd(); };
+  window.addEventListener?.("blur", onBackground);
+  window.addEventListener?.("pagehide", onBackground);
+  document.addEventListener("visibilitychange", onVisibility);
   narrow.addEventListener?.("change", onWidthChange);
   document.addEventListener(LAYOUT_SCROLL_START, onLayoutStart, { capture: true });
   document.addEventListener(LAYOUT_SCROLL_END, onLayoutEnd, { capture: true });
@@ -313,7 +312,9 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   document.addEventListener("touchcancel", onEnd, { capture: true, passive: true });
   return () => {
     unlockScroll();
-    settled = null;
+    window.removeEventListener?.("blur", onBackground);
+    window.removeEventListener?.("pagehide", onBackground);
+    document.removeEventListener("visibilitychange", onVisibility);
     narrow.removeEventListener?.("change", onWidthChange);
     document.removeEventListener(LAYOUT_SCROLL_START, onLayoutStart, { capture: true });
     document.removeEventListener(LAYOUT_SCROLL_END, onLayoutEnd, { capture: true });

@@ -1183,7 +1183,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   This keeps opening available while an answer streams, including near-end and two-stage follows,
   without excusing a reader's scroll. Smooth scrolling and explicit reader navigation still yield.
   A committed interior opening tells its connected origin to discard pending touch work:
-  terminal remainder pixels and queued wheel reports cannot escape at the lift. Native end/cancel
+  terminal remainder pixels and queued wheel reports cannot escape at the lift. If scrolling has
+  not already won, that claim also locks the origin's auto/scroll axes with inline overflow:hidden.
+  A later upward turn keeps the drawer under the finger instead of starting native scrolling.
+  Lift, cancel, a second touch, a wide viewport, exceptions and cleanup restore each original inline
+  value and priority; settled openings hold no lock. Programmatic streaming and cursor follows still
+  work while locked. An actual movement despite the lock retains the scroll-yield fallback. Native end/cancel
   events still reach their consumers to finish pinch, reorder and other gesture cleanup.
 - The terminal stack contains a positioned terminal surface, then composer or key bar. The xterm
   mount stays alive under the chat lens; changing views never creates a second connection.

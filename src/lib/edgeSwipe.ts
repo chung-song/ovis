@@ -122,7 +122,33 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   // what the drawer is set to now, and where the finger has it: its width on screen, and how fast it moved
   let state = false;
   let follow: { drawer: HTMLElement; scrim: HTMLElement | null; width: number; shown: number; x: number; at: number; speed: number } | null = null;
+  let restoreScroll: (() => void) | null = null;
+  const unlockScroll = (): void => {
+    const restore = restoreScroll;
+    restoreScroll = null;
+    restore?.();
+  };
+  const lockScroll = (origins: ReturnType<typeof scrollOrigins>): void => {
+    const saved: { style: CSSStyleDeclaration; property: string; value: string; priority: string }[] = [];
+    for (const { node, x, y } of origins) {
+      const style = node.style;
+      if (!style) continue;
+      for (const property of [...(x ? ["overflow-x"] : []), ...(y ? ["overflow-y"] : [])]) {
+        saved.push({ style, property, value: style.getPropertyValue(property), priority: style.getPropertyPriority(property) });
+      }
+    }
+    // Capture every original axis before changing a shorthand, and register restoration before
+    // the first write so a partially applied lock that throws cannot leave a scroller locked.
+    restoreScroll = () => {
+      for (const { style, property, value, priority } of saved) {
+        if (value) style.setProperty(property, value, priority);
+        else style.removeProperty(property);
+      }
+    };
+    for (const { style, property } of saved) style.setProperty(property, "hidden", "important");
+  };
   const onStart = (event: TouchEvent): void => {
+    unlockScroll();
     settled = null;
     const touch = event.touches[0];
     // the last stroke still holds the drawer: a second finger, or its end never came (the element
@@ -160,34 +186,47 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     );
   };
   const onMove = (event: TouchEvent): void => {
-    const touch = event.touches[0];
-    if (start === null || !touch) return;
-    if (pageScrolled()) { onEnd(undefined, false); return; }
-    // the screen turned wide mid-stroke: there is no drawer to swipe any more
-    if (!narrow.matches) { onEnd(); return; }
-    // a selection begun mid-stroke is the finger's: until the drawer moved, the stroke goes back
-    if (!done && selecting()) { onEnd(); return; }
-    const verdict = done ? "claim" : swipeVerdict(start.open, start.x, touch.clientX - start.x, touch.clientY - start.y);
-    // a stroke that was already the drawer's stays so when it comes back near where it started;
-    // one that never was waits for a direction. Until the drawer moves, a stroke that turns to
-    // scrolling goes back to the page, so the terminal's one-finger scroll is not held up
-    if (!claimed && verdict === "pending") return;
-    if (verdict === "ignore") { onEnd(); return; }
-    claimed = true;
-    // a recognised swipe belongs to the drawer, not to the terminal or list under the finger
-    // After an uncancelled first move Chromium may send non-cancelable moves even on a
-    // horizontal stroke that scrolls nothing. The direction test still decides ownership.
-    if (event.cancelable !== false) event.preventDefault();
-    event.stopPropagation();
-    if (!done && (verdict === "open" || verdict === "close")) {
-      // Pending interior moves reached the terminal. Cancel their queued/remainder work before
-      // showing the drawer, while still letting end/cancel reach every consumer for cleanup.
-      if (!start.open && start.x > EDGE_PX) claimTouchStroke(start.path);
-      state = verdict === "open";
-      setOpen(state);
-      done = true;
+    try {
+      const touch = event.touches[0];
+      if (start === null || !touch) return;
+      if (pageScrolled()) { onEnd(undefined, false); return; }
+      // the screen turned wide mid-stroke: there is no drawer to swipe any more
+      if (!narrow.matches) { onEnd(); return; }
+      // a selection begun mid-stroke is the finger's: until the drawer moved, the stroke goes back
+      if (!done && selecting()) { onEnd(); return; }
+      const verdict = done ? "claim" : swipeVerdict(start.open, start.x, touch.clientX - start.x, touch.clientY - start.y);
+      // a stroke that was already the drawer's stays so when it comes back near where it started;
+      // one that never was waits for a direction. Until the drawer moves, a stroke that turns to
+      // scrolling goes back to the page, so the terminal's one-finger scroll is not held up
+      if (!claimed && verdict === "pending") return;
+      if (verdict === "ignore") { onEnd(); return; }
+      claimed = true;
+      // a recognised swipe belongs to the drawer, not to the terminal or list under the finger
+      // After an uncancelled first move Chromium may send non-cancelable moves even on a
+      // horizontal stroke that scrolls nothing. The direction test still decides ownership.
+      if (event.cancelable !== false) event.preventDefault();
+      event.stopPropagation();
+      if (!done && (verdict === "open" || verdict === "close")) {
+        // Pending interior moves reached the terminal. Cancel their queued/remainder work before
+        // showing the drawer, while still letting end/cancel reach every consumer for cleanup.
+        if (!start.open && start.x > EDGE_PX) {
+          // No scroll has won before this claim. Freeze native scrolling for the held stroke;
+          // instant layout writes can still follow streaming text through overflow:hidden.
+          const target = start.path.find((node) => (node as Node).isConnected !== false) ?? null;
+          start.scrolls = scrollOrigins(target);
+          lockScroll(start.scrolls);
+          claimTouchStroke(start.path);
+        }
+        state = verdict === "open";
+        setOpen(state);
+        done = true;
+      }
+      track(touch.clientX - start.x, touch.clientX, event.timeStamp);
+    } catch (error) {
+      try { onEnd(undefined, false); }
+      finally { unlockScroll(); }
+      throw error;
     }
-    track(touch.clientX - start.x, touch.clientX, event.timeStamp);
   };
   /** Puts the drawer under the finger, `dx` from where the stroke began. */
   const track = (dx: number, x: number, at: number): void => {
@@ -216,7 +255,9 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   const onEnd = (event?: TouchEvent, forcedState?: boolean): boolean => {
     const held = follow;
     const origin = start;
-    if (forcedState === undefined && pageScrolled()) forcedState = false;
+    try {
+      if (forcedState === undefined && pageScrolled()) forcedState = false;
+    } finally { unlockScroll(); }
     settled = null;
     // Near the right edge there may be too little room to reveal half the drawer. Reaching
     // the interior opening threshold is enough, unless the finger flicked back to close it.
@@ -261,6 +302,8 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
       origin.maxTop = Math.max(0, origin.node.scrollHeight - origin.node.clientHeight);
     }
   };
+  const onWidthChange = (): void => { if (!narrow.matches) onEnd(); };
+  narrow.addEventListener?.("change", onWidthChange);
   document.addEventListener(LAYOUT_SCROLL_START, onLayoutStart, { capture: true });
   document.addEventListener(LAYOUT_SCROLL_END, onLayoutEnd, { capture: true });
   document.addEventListener("scroll", onScroll, { capture: true, passive: true });
@@ -269,7 +312,9 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   document.addEventListener("touchend", onEnd, { capture: true, passive: true });
   document.addEventListener("touchcancel", onEnd, { capture: true, passive: true });
   return () => {
+    unlockScroll();
     settled = null;
+    narrow.removeEventListener?.("change", onWidthChange);
     document.removeEventListener(LAYOUT_SCROLL_START, onLayoutStart, { capture: true });
     document.removeEventListener(LAYOUT_SCROLL_END, onLayoutEnd, { capture: true });
     document.removeEventListener("scroll", onScroll, { capture: true });

@@ -59,13 +59,15 @@ describe("watchDrawerSwipe", () => {
   type Handler = (event: unknown) => void;
   let listeners: Map<string, Handler>;
   let saved: { window: unknown; document: unknown };
-  let narrow: { matches: boolean };
+  let narrow: { matches: boolean; addEventListener(type: string, handler: Handler): void; removeEventListener(type: string): void };
   let modal: unknown;
   let selection: { isCollapsed: boolean };
 
   beforeEach(() => {
     listeners = new Map();
-    narrow = { matches: true };
+    narrow = { matches: true,
+      addEventListener: (_type, handler) => { listeners.set("media-change", handler); },
+      removeEventListener: () => { listeners.delete("media-change"); } };
     modal = null;
     selection = { isCollapsed: true };
     saved = { window: (globalThis as Record<string, unknown>)["window"], document: (globalThis as Record<string, unknown>)["document"] };
@@ -147,12 +149,100 @@ describe("watchDrawerSwipe", () => {
     expect(claims).toBe(1);
   });
 
+  const inlineStyle = () => {
+    const values = new Map<string, { value: string; priority: string }>();
+    return {
+      getPropertyValue: (property: string) => values.get(property)?.value ?? "",
+      getPropertyPriority: (property: string) => values.get(property)?.priority ?? "",
+      setProperty: (property: string, value: string, priority = "") => { values.set(property, { value, priority }); },
+      removeProperty: (property: string) => { const old = values.get(property)?.value ?? ""; values.delete(property); return old; },
+    };
+  };
+
   const scrollTarget = () => {
     const target = { scrollHeight: 500, clientHeight: 100, scrollTop: 100,
-      scrollWidth: 200, clientWidth: 100, scrollLeft: 0, parentElement: null,
+      scrollWidth: 200, clientWidth: 100, scrollLeft: 0, parentElement: null, style: inlineStyle(),
       dispatchEvent: (event: Event) => { listeners.get(event.type)?.({ target }); return true; } };
     return target;
   };
+
+  test("only the committed interior opening locks scroll axes, then restores inline values and priorities", () => {
+    for (const ending of ["touchend", "touchcancel", "second-finger", "wide", "cleanup", "set-open-throws", "partial-lock-throws"] as const) {
+      narrow.matches = true;
+      const target = scrollTarget();
+      target.style.setProperty("overflow-x", "scroll", "important");
+      target.style.setProperty("overflow-y", "auto");
+      (document as unknown as { getElementById(): unknown }).getElementById = () => ({ style: {}, getBoundingClientRect: () => ({ width: 300 }) });
+      let open = false;
+      const stop = watchDrawerSwipe(() => open, (next) => {
+        if (ending === "set-open-throws" && next) throw new Error("open failed");
+        open = next;
+      });
+      const event = (x: number) => ({ touches: [{ clientX: x, clientY: 300 }], target, cancelable: false, stopPropagation() {}, timeStamp: x });
+      listeners.get("touchstart")!(event(200));
+      listeners.get("touchmove")!(event(220));
+      expect(target.style.getPropertyValue("overflow-x")).toBe("scroll");
+      expect(target.style.getPropertyValue("overflow-y")).toBe("auto");
+      if (ending === "partial-lock-throws") {
+        const set = target.style.setProperty;
+        target.style.setProperty = (property, value, priority) => {
+          if (property === "overflow-y" && value === "hidden") throw new Error("lock failed");
+          set(property, value, priority);
+        };
+      }
+      if (ending === "set-open-throws" || ending === "partial-lock-throws") {
+        expect(() => listeners.get("touchmove")!(event(270))).toThrow();
+      } else {
+        listeners.get("touchmove")!(event(270));
+        expect(target.style.getPropertyValue("overflow-x")).toBe("hidden");
+        expect(target.style.getPropertyValue("overflow-y")).toBe("hidden");
+        if (ending === "cleanup") stop();
+        else if (ending === "wide") { narrow.matches = false; listeners.get("media-change")!({}); }
+        else if (ending === "second-finger") listeners.get("touchstart")!({ ...event(270), touches: [{ clientX: 270, clientY: 300 }, { clientX: 290, clientY: 300 }] });
+        else listeners.get(ending)!({ touches: [], timeStamp: 400 });
+      }
+      expect(target.style.getPropertyValue("overflow-x")).toBe("scroll");
+      expect(target.style.getPropertyPriority("overflow-x")).toBe("important");
+      expect(target.style.getPropertyValue("overflow-y")).toBe("auto");
+      expect(target.style.getPropertyPriority("overflow-y")).toBe("");
+      stop();
+    }
+  });
+
+  test("folded hosts lock only the scrollable axis and adopted hosts lock both", () => {
+    const globals = globalThis as unknown as Record<string, unknown>;
+    const savedStyle = globals["getComputedStyle"];
+    try {
+      for (const folded of [true, false]) {
+        globals["getComputedStyle"] = () => ({ overflowX: folded ? "hidden" : "auto", overflowY: "auto" });
+        const target = scrollTarget();
+        expect(stroke([[200, 300], [260, 300], [280, 250]], false, target, () => {
+          expect(target.style.getPropertyValue("overflow-x")).toBe(folded ? "" : "hidden");
+          expect(target.style.getPropertyValue("overflow-y")).toBe("hidden");
+        })).toEqual({ reached: 0, calls: [true] });
+        expect(target.style.getPropertyValue("overflow-x")).toBe("");
+        expect(target.style.getPropertyValue("overflow-y")).toBe("");
+      }
+    } finally {
+      if (savedStyle === undefined) delete globals["getComputedStyle"];
+      else globals["getComputedStyle"] = savedStyle;
+    }
+  });
+
+  test("yielding before a claim never locks, and absent inline declarations are removed after lift", () => {
+    const target = scrollTarget();
+    let writes = 0;
+    const set = target.style.setProperty;
+    target.style.setProperty = (...args) => { writes++; set(...args); };
+    expect(stroke([[200, 300], [220, 310], [270, 330]], false, target,
+      () => { target.scrollTop -= 10; })).toEqual({ reached: 2, calls: [] });
+    expect(writes).toBe(0);
+    target.scrollTop = 100;
+    expect(stroke([[200, 300], [220, 300], [270, 300]], false, target)).toEqual({ reached: 1, calls: [true] });
+    expect(writes).toBe(2);
+    expect(target.style.getPropertyValue("overflow-x")).toBe("");
+    expect(target.style.getPropertyValue("overflow-y")).toBe("");
+  });
 
   test("an interior gesture that already scrolled vertically or horizontally stays with the page", () => {
     const target = scrollTarget();

@@ -152,6 +152,46 @@ try {
   assert.ok(diagonalMoves.every((move) => !move.cancelled), "a diagonal stroke is not cancelled by the drawer");
   await page.waitForFunction((before) => (document.querySelector(".chat-view")?.scrollTop ?? before) < before, diagonalBefore);
   console.log("PASS native direction changes and chat scrolling");
+  // A turn upward after the opening threshold belongs to the held drawer, not to native chat
+  // scrolling. Start in the middle: at the end an unlocked upward stroke could not scroll either.
+  for (const ending of ["touchEnd", "touchCancel"] as const) {
+    await page.goto(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
+    await page.locator(".conn-live").first().waitFor();
+    await page.waitForFunction(() => (document.querySelector(".chat-view")?.scrollTop ?? 0) > 0);
+    await page.waitForFunction(() => document.getElementById("workspace-drawer")!.getBoundingClientRect().right <= 0.5);
+    const original = await page.locator(".chat-view").evaluate((node) => {
+      const style = (node as HTMLElement).style;
+      style.overflow = "auto";
+      style.setProperty("overflow-y", "scroll", "important");
+      node.scrollTop = (node.scrollHeight - node.clientHeight) / 2;
+      return ["overflow-x", "overflow-y"].map((property) => [style.getPropertyValue(property), style.getPropertyPriority(property)]);
+    });
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const before = await page.locator(".chat-view").evaluate((node) => node.scrollTop);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 170, y: 420 }] });
+    for (const x of [190, 220, 240]) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: 420 }] });
+    await page.locator("#workspace-drawer.is-open").waitFor();
+    assert.equal(await page.locator(".chat-view").evaluate((node) => getComputedStyle(node).overflowY), "hidden", "the claimed origin is locked before the upward turn");
+    for (const [x, y] of [[245, 390], [250, 330], [260, 260]]) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] });
+    }
+    assert.equal(await page.locator(".chat-view").evaluate((node) => node.scrollTop), before, "bending upward after 56px cannot scroll behind the held drawer");
+    assert.equal(await drawer.getAttribute("aria-modal"), "true", "the held drawer does not disappear under the finger");
+    await cdp.send("Input.dispatchTouchEvent", { type: ending, touchPoints: [] });
+    assert.deepEqual(await page.locator(".chat-view").evaluate((node) => {
+      const style = (node as HTMLElement).style;
+      return ["overflow-x", "overflow-y"].map((property) => [style.getPropertyValue(property), style.getPropertyPriority(property)]);
+    }), original, `${ending} restores the exact inline overflow values and priorities`);
+    await page.locator("#workspace-drawer.is-open").waitFor();
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => document.getElementById("workspace-drawer")!.getBoundingClientRect().right <= 0.5);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 170, y: 500 }] });
+    for (const y of [470, 420, 350, 280]) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: 170, y }] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await page.waitForFunction((top) => document.querySelector(".chat-view")!.scrollTop > top, before);
+    assert.equal(await drawer.getAttribute("aria-modal"), null, "after restoration an ordinary upward stroke scrolls instead of opening");
+  }
+  console.log("PASS claimed upward turns hold the drawer without scrolling; end/cancel restore scrolling");
   // Streaming auto-follow grows the scroll range and moves to its new end. That is not
   // a user scroll and must neither prevent nor undo the same interior opening.
   for (const committed of [false, true]) {

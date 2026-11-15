@@ -71,12 +71,12 @@ try {
     document.addEventListener("wheel", (event) => { if (!event.isTrusted) probe.wheels++; }, { capture: true, passive: true });
     document.addEventListener("ovis:touch-stroke-claimed", () => probe.claims++, { capture: true, passive: true });
   });
-  const page = await context.newPage();
+  let page = await context.newPage();
   page.setDefaultTimeout(10_000);
   await page.goto(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
   await page.locator(".conn-live").first().waitFor();
   await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
-  const drawer = page.locator("#workspace-drawer");
+  let drawer = page.locator("#workspace-drawer");
   await drawer.waitFor({ state: "visible" });
   assert.equal(await drawer.getAttribute("role"), "dialog", "the phone drawer exposes dialog semantics");
   assert.equal(await drawer.getAttribute("aria-modal"), "true", "the trapped phone drawer is modal");
@@ -102,7 +102,18 @@ try {
   await page.getByRole("button", { name: "Open workspace list", exact: true }).waitFor();
   assert.equal(await drawer.getAttribute("aria-modal"), null, "a closed drawer is not modal");
   // modal or not, the drawer follows the finger: a swipe in from the left edge opens it, a swipe back closes it
-  const cdp = await context.newCDPSession(page);
+  let cdp = await context.newCDPSession(page);
+  // Closing a drawer schedules history.back(). A following goto on the same page can race
+  // that traversal and abort. Each subsequent fixture gets its own page and history instead.
+  // Keep the context so its init scripts and device settings still apply to every fixture.
+  const openFixture = async (url: string): Promise<void> => {
+    await page.close();
+    page = await context.newPage();
+    page.setDefaultTimeout(10_000);
+    drawer = page.locator("#workspace-drawer");
+    cdp = await context.newCDPSession(page);
+    await page.goto(url);
+  };
   const swipe = async (from: number, to: number, fromY = 420, toY = fromY, durationMs = 0): Promise<void> => {
     await page.waitForFunction(() => {
       const drawer = document.getElementById("workspace-drawer")!;
@@ -174,7 +185,7 @@ try {
   console.log("PASS native direction changes and chat scrolling");
   // A delayed successful send receipt follows a scrollback chat with asynchronous smooth
   // scrolling. Once the touch ended, that automatic movement must not close the drawer.
-  await page.goto(`http://127.0.0.1:${server.port}/?pane=w1J%3Ap1&view=chat&drawer_receipt=1`);
+  await openFixture(`http://127.0.0.1:${server.port}/?pane=w1J%3Ap1&view=chat&drawer_receipt=1`);
   await page.locator(".conn-live").first().waitFor();
   await page.locator(".chat-terminal-fallback > summary").click();
   await page.waitForFunction(() => document.querySelector(".chat-terminal-snapshot pre")?.textContent?.includes("Receipt fixture line 159"));
@@ -218,7 +229,7 @@ try {
   // A turn upward after the opening threshold belongs to the held drawer, not to native chat
   // scrolling. Start in the middle: at the end an unlocked upward stroke could not scroll either.
   for (const ending of ["touchEnd", "touchCancel"] as const) {
-    await page.goto(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
+    await openFixture(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
     await page.locator(".conn-live").first().waitFor();
     await page.waitForFunction(() => (document.querySelector(".chat-view")?.scrollTop ?? 0) > 0);
     await page.waitForFunction(() => document.getElementById("workspace-drawer")!.getBoundingClientRect().right <= 0.5);
@@ -259,7 +270,7 @@ try {
   // a user scroll and must neither prevent nor undo the same interior opening.
   for (const committed of [false, true]) {
     // A fresh page prevents the preceding vertical control's momentum from entering this stroke.
-    await page.goto(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
+    await openFixture(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
     await page.locator(".conn-live").first().waitFor();
     await page.waitForFunction(() => (document.querySelector(".chat-view")?.scrollTop ?? 0) > 0);
     await page.waitForFunction(() => document.getElementById("workspace-drawer")!.getBoundingClientRect().right <= 0.5);
@@ -298,7 +309,7 @@ try {
   for (const phase of ["early", "held", "released"] as const) {
     const late = phase !== "early";
     // A fresh page prevents the preceding vertical control's momentum from entering this stroke.
-    await page.goto(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
+    await openFixture(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
     await page.locator(".conn-live").first().waitFor();
     await page.waitForFunction(() => (document.querySelector(".chat-view")?.scrollTop ?? 0) > 0);
     await page.waitForFunction(() => document.getElementById("workspace-drawer")!.getBoundingClientRect().right <= 0.5);
@@ -330,7 +341,7 @@ try {
   // Exercise the real conversation fetch -> React -> measured list -> automatic follow path.
   // Each update grows the same assistant row while native CDP touches remain down.
   for (const vertical of [false, true]) {
-    await page.goto(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
+    await openFixture(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=chat`);
     await page.locator(".conn-live").first().waitFor();
     await page.waitForFunction(() => document.getElementById("workspace-drawer")!.getBoundingClientRect().right <= 0.5);
     await page.evaluate(() => {
@@ -415,7 +426,7 @@ try {
     return { wheels: p.wheels, ends: p.ends, claims: p.claims, inputs: [...p.inputs] };
   });
   for (const ending of ["touchEnd", "touchCancel"] as const) {
-    await page.goto(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=terminal`);
+    await openFixture(`http://127.0.0.1:${server.port}/?pane=w1C%3Ap1&view=terminal`);
     await page.waitForFunction(() => {
       const host = document.querySelector(".pane-terminal") as HTMLElement & { outputProbe?(): { writes: number } };
       return host?.outputProbe?.().writes;

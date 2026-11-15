@@ -732,6 +732,18 @@ try {
 
         await withPage(browser, base, off, "/", block("the entry at the drawer's foot, and no drawer in the mode"), async (page) => {
           await page.locator(".pane-slot").first().waitFor();
+          await page.evaluate(() => {
+            const trace: string[] = [];
+            Object.assign(window, { inboxSwipeTrace: trace });
+            for (const name of ["back", "forward", "go", "pushState", "replaceState"] as const) {
+              const original = history[name].bind(history) as (...args: unknown[]) => unknown;
+              Object.defineProperty(history, name, { configurable: true, value: (...args: unknown[]) => {
+                trace.push(`${name} ${JSON.stringify(args)} ${location.href}`);
+                return original(...args);
+              } });
+            }
+            window.addEventListener("popstate", () => trace.push(`popstate ${location.href}`));
+          });
           await page.locator("#drawer-toggle").tap();
           const entry = page.locator(".sidebar.is-open .inbox-foot-entry");
           await entry.waitFor();
@@ -746,7 +758,15 @@ try {
           for (let x = 24; x <= 304; x += 40) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: 422 }] });
           await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
           await frames(page);
-          assert.equal(await page.locator("#workspace-drawer, .scrim.is-open").count(), 0, "a swipe from the edge opens no drawer in the mode");
+          const afterSwipe = await page.evaluate(() => ({
+            url: location.href,
+            trace: (window as unknown as { inboxSwipeTrace: string[] }).inboxSwipeTrace,
+            inbox: document.querySelector(".mode-inbox") !== null,
+            matches: [...document.querySelectorAll("#workspace-drawer, .scrim.is-open")].map((node) => ({
+              id: node.id, className: node.className, modal: node.getAttribute("aria-modal"),
+            })),
+          }));
+          assert.equal(afterSwipe.matches.length, 0, `a swipe from the edge opens no drawer in the mode: ${JSON.stringify(afterSwipe)}`);
           await page.locator(".mode-inbox").waitFor();
           pass(13, "the drawer's foot has Open agent inbox, which opens the list; in the mode a swipe from the left edge opens no drawer");
         });

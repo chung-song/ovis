@@ -1,3 +1,9 @@
+/* The inbox list has no horizontal pan. Keep a flat stroke on that screen from becoming
+   Chromium's history swipe, while leaving vertical scrolling and pinch zoom native. */
+.app.is-inbox-list {
+  touch-action: pan-y pinch-zoom;
+}
+
 /* The inbox mode's shell (App.tsx, InboxMode.tsx; the list is InboxList.css). Every value is one of the app's tokens. */
 
 /* The mode's own sizes, defined here once for the list (InboxList.css) and the pane's zone alike: a round control,

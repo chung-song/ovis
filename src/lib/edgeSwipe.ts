@@ -104,7 +104,7 @@ function scrollOrigins(target: EventTarget | null): { node: HTMLElement; top: nu
 }
 
 /** Listens on the whole document; returns the cleanup. */
-export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean) => void): () => void {
+export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean) => void, canOpen: () => boolean): () => void {
   const narrow = window.matchMedia("(max-width: 768px)");
   type Stroke = { x: number; y: number; open: boolean; at: number; path: EventTarget[];
     scrolls: ReturnType<typeof scrollOrigins>; pageX: number; pageY: number };
@@ -151,7 +151,7 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     // the last stroke still holds the drawer: a second finger, or its end never came (the element
     // it began on left the page and took its touches with it). It lets go where it was first
     const open = follow !== null ? onEnd() : isOpen();
-    start = event.touches.length === 1 && touch && narrow.matches && document.querySelector(MODAL) === null && (open || (!scrolledAside(event.target) && !onDivider(event.target)))
+    start = event.touches.length === 1 && touch && narrow.matches && document.querySelector(MODAL) === null && (open || (canOpen() && !scrolledAside(event.target) && !onDivider(event.target)))
       && !editable(event.target) && !selecting()
       ? { x: touch.clientX, y: touch.clientY, open, at: event.timeStamp,
         path: event.composedPath?.() ?? (event.target ? [event.target] : []),
@@ -186,6 +186,8 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     try {
       const touch = event.touches[0];
       if (start === null || !touch) return;
+      // The shell can disappear or enter inbox mode between touchstart and the claim.
+      if (!start.open && !canOpen()) { onEnd(undefined, false); return; }
       if (pageScrolled()) { onEnd(undefined, false); return; }
       // the screen turned wide mid-stroke: there is no drawer to swipe any more
       if (!narrow.matches) { onEnd(); return; }

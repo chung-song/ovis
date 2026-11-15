@@ -25,7 +25,8 @@ export function useSidebarLayout({ initialLink, drawerBlocked }: SidebarLayoutPa
   const wideScreen = useMediaQuery("(min-width: 769px)");
   useEffect(() => { if (wideScreen) setDrawerOpen(false); }, [wideScreen]);
   // on a phone the drawer follows a swipe in from the left edge, and a swipe back (lib/edgeSwipe.ts)
-  useEffect(() => watchDrawerSwipe(() => drawerOpenRef.current, setDrawerOpen), []);
+  useEffect(() => watchDrawerSwipe(() => drawerOpenRef.current, setDrawerOpen,
+    () => drawerBlocked?.current !== true && document.getElementById("workspace-drawer") !== null), [drawerBlocked, setDrawerOpen]);
   // While the drawer is out on a phone it holds the keyboard as a dialog does (G-003): App.tsx's useDrawerDialog
   // (lib/headerSessions.ts) owns its Tab and Escape and gives the focus back when it closes
   // a desktop opened by a link that says so starts with the sidebar collapsed, and the address says so while it is

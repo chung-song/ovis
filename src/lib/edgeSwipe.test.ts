@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { finalStep, HERDR_MOUSE_SCROLL_LINES, wheelSteps } from "./wheelSteps.ts";
 import { layoutScroll } from "./layoutScroll.ts";
 import { claimTouchStroke, TOUCH_STROKE_CLAIMED } from "./touchClaim.ts";
-import { drawerSettles, EDGE_PX, FLING_SPEED, SWIPE_PX, swipeVerdict, watchDrawerSwipe } from "./edgeSwipe.ts";
+import { drawerSettles, EDGE_PX, FLING_SPEED, SWIPE_PX, swipeVerdict, watchDrawerSwipe as watchDrawerSwipeListener } from "./edgeSwipe.ts";
+
+// Most listener fixtures model an available drawer without rendering the app shell.
+const watchDrawerSwipe = (isOpen: () => boolean, setOpen: (open: boolean) => void, canOpen = () => true) =>
+  watchDrawerSwipeListener(isOpen, setOpen, canOpen);
 
 describe("swipeVerdict", () => {
   test("a swipe in from the left edge opens the closed drawer", () => {
@@ -107,6 +112,85 @@ describe("watchDrawerSwipe", () => {
     stop();
     return { reached, calls };
   };
+
+  test("an unavailable closed drawer leaves interior and edge strokes with the page", () => {
+    for (const x of [4, 200]) {
+      const calls: boolean[] = [];
+      const target = scrollTarget();
+      let claims = 0;
+      target.dispatchEvent = () => { claims++; return true; };
+      const stop = watchDrawerSwipe(() => false, (next) => calls.push(next), () => false);
+      const event = (dx: number, dy: number) => ({ target, touches: [{ clientX: x + dx, clientY: 300 + dy }],
+        preventDefault() { throw new Error("page scroll prevented"); },
+        stopPropagation() { throw new Error("page move stopped"); } });
+      listeners.get("touchstart")!(event(0, 0));
+      listeners.get("touchmove")!(event(54, 27));
+      listeners.get("touchmove")!(event(70, 30));
+      listeners.get("touchmove")!(event(70, 90));
+      listeners.get("touchend")!({ touches: [] });
+      expect(calls).toEqual([]);
+      expect(claims).toBe(0);
+      expect(target.style.getPropertyValue("overflow-y")).toBe("");
+      stop();
+    }
+  });
+
+  test("an unavailable drawer preserves the terminal remainder until lift", () => {
+    const target = new EventTarget();
+    let pixels = 0;
+    let reports = 0;
+    const stepPixels = 16.5 * HERDR_MOUSE_SCROLL_LINES;
+    target.addEventListener(TOUCH_STROKE_CLAIMED, () => { pixels = 0; });
+    const stop = watchDrawerSwipe(() => false, () => { throw new Error("drawer opened"); }, () => false);
+    let lastY = 300;
+    const event = (x: number, y: number) => {
+      let blocked = false;
+      return { target, touches: [{ clientX: x, clientY: y }], preventDefault() { blocked = true; },
+        stopPropagation() { blocked = true; }, get blocked() { return blocked; } };
+    };
+    listeners.get("touchstart")!(event(200, 300));
+    for (const [x, y] of [[254, 327], [270, 330]] as const) {
+      const move = event(x, y);
+      listeners.get("touchmove")!(move);
+      if (!move.blocked) {
+        const next = wheelSteps(pixels + y - lastY, stepPixels);
+        reports += next.steps;
+        pixels = next.rest;
+        lastY = y;
+      }
+    }
+    listeners.get("touchend")!({ touches: [] });
+    reports += finalStep(pixels, stepPixels);
+    expect(reports).toBe(1);
+    stop();
+  });
+
+  test("availability is rechecked before claiming a pending interior stroke", () => {
+    let available = true;
+    const calls: boolean[] = [];
+    const stop = watchDrawerSwipe(() => false, (next) => calls.push(next), () => available);
+    const event = (x: number) => ({ touches: [{ clientX: x, clientY: 300 }],
+      preventDefault() { throw new Error("page scroll prevented"); },
+      stopPropagation() { throw new Error("page move stopped"); } });
+    listeners.get("touchstart")!(event(200));
+    listeners.get("touchmove")!(event(230));
+    available = false;
+    listeners.get("touchmove")!(event(270));
+    listeners.get("touchend")!({ touches: [] });
+    expect(calls).toEqual([]);
+    stop();
+  });
+
+  test("an already open drawer can close even when opening is blocked", () => {
+    const calls: boolean[] = [];
+    const stop = watchDrawerSwipe(() => true, (next) => calls.push(next), () => false);
+    const event = (x: number) => ({ touches: [{ clientX: x, clientY: 300 }], preventDefault() {}, stopPropagation() {} });
+    listeners.get("touchstart")!(event(200));
+    listeners.get("touchmove")!(event(130));
+    listeners.get("touchend")!({ touches: [] });
+    expect(calls).toEqual([false]);
+    stop();
+  });
 
   test("a claimed stroke that comes back within the slop keeps every move from the page", () => {
     expect(stroke([[4, 400], [24, 400], [6, 400], [5, 400]])).toEqual({ reached: 0, calls: [] });
@@ -428,7 +512,13 @@ describe("watchDrawerSwipe", () => {
   test("a swipe on a code block scrolled sideways scrolls it back instead", () => {
     const code = { scrollLeft: 40, scrollWidth: 900, clientWidth: 350, parentElement: null };
     const text = { scrollLeft: 0, scrollWidth: 0, clientWidth: 0, parentElement: code };
+    for (const target of [code, text]) {
+      expect(stroke([[200, 400], [230, 400], [270, 400]], false, target)).toEqual({ reached: 2, calls: [] });
+      expect(stroke([[200, 400], [170, 400], [130, 400]], false, target)).toEqual({ reached: 2, calls: [] });
+    }
     expect(stroke([[4, 400], [24, 400], [90, 400]], false, text)).toEqual({ reached: 2, calls: [] });
+    code.scrollLeft = 0;
+    expect(stroke([[200, 400], [230, 400], [270, 400]], false, text)).toEqual({ reached: 1, calls: [true] });
   });
 
   test("a stroke that goes on after the screen turned wide leaves the drawer alone", () => {

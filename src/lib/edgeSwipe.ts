@@ -1,3 +1,6 @@
+import { LAYOUT_SCROLL_START, LAYOUT_SCROLL_END } from "./layoutScroll.ts";
+import { claimTouchStroke } from "./touchClaim.ts";
+
 /*
  * The workspace drawer follows a phone's finger: a rightward swipe opens it, as the menu button
  * does, and a swipe to the left closes it again. Away from the left edge the opening angle is
@@ -87,10 +90,32 @@ function selecting(): boolean {
   return selection !== null && !selection.isCollapsed;
 }
 
+/** Native scrolling or a terminal grid pan that already started keeps the gesture. */
+function scrollOrigins(target: EventTarget | null): { node: HTMLElement; top: number; left: number; maxTop: number; depth: number; x: boolean; y: boolean }[] {
+  const origins: ReturnType<typeof scrollOrigins> = [];
+  for (let node = target as HTMLElement | null; node; node = node.parentElement) {
+    const style = typeof getComputedStyle === "function" ? getComputedStyle(node) : null;
+    const x = style ? /^(auto|scroll)$/.test(style.overflowX) : node.scrollWidth > node.clientWidth;
+    const y = style ? /^(auto|scroll)$/.test(style.overflowY) : node.scrollHeight > node.clientHeight;
+    if (x || y) origins.push({ node, top: node.scrollTop, left: node.scrollLeft,
+      maxTop: Math.max(0, node.scrollHeight - node.clientHeight), depth: 0, x, y });
+  }
+  return origins;
+}
+
 /** Listens on the whole document; returns the cleanup. */
 export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean) => void): () => void {
   const narrow = window.matchMedia("(max-width: 768px)");
-  let start: { x: number; y: number; open: boolean; at: number } | null = null;
+  type Stroke = { x: number; y: number; open: boolean; at: number; path: EventTarget[];
+    scrolls: ReturnType<typeof scrollOrigins>; pageX: number; pageY: number };
+  let start: Stroke | null = null;
+  // A last compositor update can arrive after lift. Keep that opening's origin until the next
+  // interaction or close, rather than guessing how many frames a phone will take to deliver it.
+  let settled: Stroke | null = null;
+  const observed = (): Stroke | null => {
+    if (settled && (!isOpen() || !narrow.matches)) settled = null;
+    return start ?? settled;
+  };
   // a recognised swipe owns the stroke until the finger lifts, after the drawer moved too
   let claimed = false;
   let done = false;
@@ -98,21 +123,46 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   let state = false;
   let follow: { drawer: HTMLElement; scrim: HTMLElement | null; width: number; shown: number; x: number; at: number; speed: number } | null = null;
   const onStart = (event: TouchEvent): void => {
+    settled = null;
     const touch = event.touches[0];
     // the last stroke still holds the drawer: a second finger, or its end never came (the element
     // it began on left the page and took its touches with it). It lets go where it was first
     const open = follow !== null ? onEnd() : isOpen();
     start = event.touches.length === 1 && touch && narrow.matches && document.querySelector(MODAL) === null && (open || (!scrolledAside(event.target) && !onDivider(event.target)))
       && !editable(event.target) && !selecting()
-      ? { x: touch.clientX, y: touch.clientY, open, at: event.timeStamp } : null;
+      ? { x: touch.clientX, y: touch.clientY, open, at: event.timeStamp,
+        path: event.composedPath?.() ?? (event.target ? [event.target] : []),
+        scrolls: !open && touch.clientX > EDGE_PX ? scrollOrigins(event.target) : [],
+        pageX: window.scrollX ?? 0, pageY: window.scrollY ?? 0 } : null;
     claimed = false;
     done = false;
     state = open;
     follow = null;
   };
+  const pageScrolled = (): boolean => {
+    const stroke = observed();
+    return stroke !== null && !stroke.open && stroke.x > EDGE_PX && (
+    stroke.scrolls.some((origin) => {
+      const { node } = origin;
+      if (origin.depth > 0) return false;
+      const maxTop = Math.max(0, node.scrollHeight - node.clientHeight);
+      // A shorter transcript clamps a view past its new end before any JS scroll write.
+      // Only that unavoidable bound correction is automatic without an explicit layout signal.
+      if (origin.y && maxTop < origin.maxTop && origin.top > maxTop
+          && Math.abs(node.scrollTop - maxTop) <= 1) {
+        origin.top = node.scrollTop;
+        origin.maxTop = maxTop;
+      }
+      if (node.scrollTop === origin.top) origin.maxTop = maxTop;
+      return (origin.y && node.scrollTop !== origin.top) || (origin.x && node.scrollLeft !== origin.left);
+    })
+    || (window.scrollX ?? 0) !== stroke.pageX || (window.scrollY ?? 0) !== stroke.pageY
+    );
+  };
   const onMove = (event: TouchEvent): void => {
     const touch = event.touches[0];
     if (start === null || !touch) return;
+    if (pageScrolled()) { onEnd(undefined, false); return; }
     // the screen turned wide mid-stroke: there is no drawer to swipe any more
     if (!narrow.matches) { onEnd(); return; }
     // a selection begun mid-stroke is the finger's: until the drawer moved, the stroke goes back
@@ -130,6 +180,9 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     if (event.cancelable !== false) event.preventDefault();
     event.stopPropagation();
     if (!done && (verdict === "open" || verdict === "close")) {
+      // Pending interior moves reached the terminal. Cancel their queued/remainder work before
+      // showing the drawer, while still letting end/cancel reach every consumer for cleanup.
+      if (!start.open && start.x > EDGE_PX) claimTouchStroke(start.path);
       state = verdict === "open";
       setOpen(state);
       done = true;
@@ -160,8 +213,11 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     if (follow.scrim !== null) follow.scrim.style.opacity = String(shown / Math.max(1, follow.width));
   };
   /** Ends the stroke; returns what the drawer is set to now. */
-  const onEnd = (event?: TouchEvent): boolean => {
+  const onEnd = (event?: TouchEvent, forcedState?: boolean): boolean => {
     const held = follow;
+    const origin = start;
+    if (forcedState === undefined && pageScrolled()) forcedState = false;
+    settled = null;
     // Near the right edge there may be too little room to reveal half the drawer. Reaching
     // the interior opening threshold is enough, unless the finger flicked back to close it.
     const interiorOpening = start !== null && !start.open && start.x > EDGE_PX && held !== null && held.x - start.x >= SWIPE_PX;
@@ -169,13 +225,17 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     claimed = false;
     done = false;
     follow = null;
-    if (held === null) return state;
+    if (held === null) {
+      if (forcedState !== undefined && forcedState !== state) { state = forcedState; setOpen(state); }
+      return state;
+    }
     // a finger that rested before it lifted, or a stroke handed back mid-way, flicks nothing
     const rested = event === undefined || event.timeStamp - held.at > REST_MS;
     const speed = rested ? 0 : held.speed;
-    const open = (interiorOpening && speed > -FLING_SPEED) || drawerSettles(held.shown, held.width, speed);
+    const open = forcedState ?? ((interiorOpening && speed > -FLING_SPEED) || drawerSettles(held.shown, held.width, speed));
     if (open !== state) setOpen(open);
     state = open;
+    if (open && interiorOpening) settled = origin;
     // the stylesheet's slide takes it from where the finger left it to where it settles
     held.drawer.style.transition = "";
     held.drawer.style.visibility = "";
@@ -183,11 +243,36 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     if (held.scrim !== null) { held.scrim.style.transition = ""; held.scrim.style.opacity = ""; }
     return open;
   };
+  // A compositor scroll may arrive after the move that took the drawer. Yield then too,
+  // rather than leave an open drawer in front of a transcript that is still scrolling.
+  const onScroll = (): void => { if (pageScrolled()) onEnd(undefined, false); };
+  // Check first: a pending native scroll cannot be hidden by the layout's next absolute write.
+  const onLayoutStart = (event: Event): void => {
+    const origin = observed()?.scrolls.find(({ node }) => node === event.target);
+    if (!origin) return;
+    if (origin.depth === 0 && pageScrolled()) { onEnd(undefined, false); return; }
+    origin.depth++;
+  };
+  const onLayoutEnd = (event: Event): void => {
+    const origin = observed()?.scrolls.find(({ node }) => node === event.target);
+    if (origin && origin.depth > 0 && --origin.depth === 0) {
+      origin.top = origin.node.scrollTop;
+      origin.left = origin.node.scrollLeft;
+      origin.maxTop = Math.max(0, origin.node.scrollHeight - origin.node.clientHeight);
+    }
+  };
+  document.addEventListener(LAYOUT_SCROLL_START, onLayoutStart, { capture: true });
+  document.addEventListener(LAYOUT_SCROLL_END, onLayoutEnd, { capture: true });
+  document.addEventListener("scroll", onScroll, { capture: true, passive: true });
   document.addEventListener("touchstart", onStart, { capture: true, passive: true });
   document.addEventListener("touchmove", onMove, { capture: true, passive: false });
   document.addEventListener("touchend", onEnd, { capture: true, passive: true });
   document.addEventListener("touchcancel", onEnd, { capture: true, passive: true });
   return () => {
+    settled = null;
+    document.removeEventListener(LAYOUT_SCROLL_START, onLayoutStart, { capture: true });
+    document.removeEventListener(LAYOUT_SCROLL_END, onLayoutEnd, { capture: true });
+    document.removeEventListener("scroll", onScroll, { capture: true });
     document.removeEventListener("touchstart", onStart, { capture: true });
     document.removeEventListener("touchmove", onMove, { capture: true });
     document.removeEventListener("touchend", onEnd, { capture: true });

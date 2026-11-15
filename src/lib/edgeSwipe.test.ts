@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { layoutScroll } from "./layoutScroll.ts";
+import { claimTouchStroke, TOUCH_STROKE_CLAIMED } from "./touchClaim.ts";
 import { drawerSettles, EDGE_PX, FLING_SPEED, SWIPE_PX, swipeVerdict, watchDrawerSwipe } from "./edgeSwipe.ts";
 
 describe("swipeVerdict", () => {
@@ -129,6 +131,174 @@ describe("watchDrawerSwipe", () => {
       expect(stroke([[200, 300], [230, 300], [280, 300]], false, target)).toEqual({ reached: 2, calls: [] });
       expect(stroke([[200, 300], [170, 300], [120, 300]], true, target)).toEqual({ reached: 0, calls: [false] });
     }
+  });
+
+  test("only a committed interior opening cancels the origin's pending touch work, once", () => {
+    const target = new EventTarget();
+    let claims = 0;
+    target.addEventListener(TOUCH_STROKE_CLAIMED, () => claims++);
+    stroke([[200, 300], [220, 302]], false, target);
+    stroke([[200, 300], [220, 302], [220, 370]], false, target);
+    stroke([[4, 300], [24, 302], [70, 302]], false, target);
+    expect(claims).toBe(0);
+    stroke([[200, 300], [220, 310], [260, 326], [280, 330], [300, 340]], false, target);
+    expect(claims).toBe(1);
+    stroke([[300, 300], [240, 300], [200, 300]], true, target);
+    expect(claims).toBe(1);
+  });
+
+  const scrollTarget = () => {
+    const target = { scrollHeight: 500, clientHeight: 100, scrollTop: 100,
+      scrollWidth: 200, clientWidth: 100, scrollLeft: 0, parentElement: null,
+      dispatchEvent: (event: Event) => { listeners.get(event.type)?.({ target }); return true; } };
+    return target;
+  };
+
+  test("an interior gesture that already scrolled vertically or horizontally stays with the page", () => {
+    const target = scrollTarget();
+    expect(stroke([[200, 300], [220, 310], [270, 330]], false, target,
+      () => { target.scrollTop = 90; })).toEqual({ reached: 2, calls: [] });
+    expect(stroke([[200, 300], [220, 310], [270, 330]], false, target,
+      () => { target.scrollLeft = 10; })).toEqual({ reached: 2, calls: [] });
+  });
+
+  test("an unchanged scroll container still allows an interior opening", () => {
+    expect(stroke([[200, 300], [220, 310], [270, 330]], false, scrollTarget())).toEqual({ reached: 1, calls: [true] });
+  });
+
+  test("a late compositor scroll yields the drawer too, instead of letting it stay open over scrolling", () => {
+    const target = scrollTarget();
+    const drawer = { style: {} as Record<string, string>, getBoundingClientRect: () => ({ width: 300 }) };
+    const doc = (globalThis as Record<string, unknown>)["document"] as Record<string, unknown>;
+    doc["getElementById"] = () => drawer;
+    expect(stroke([[200, 300], [260, 310], [300, 320]], false, target, () => {
+      target.scrollTop = 90;
+      listeners.get("scroll")!({ target });
+    })).toEqual({ reached: 1, calls: [true, false] });
+    expect(drawer.style["transform"]).toBe("");
+  });
+
+  test("explicit layout following keeps opening through growth, shrinkage and two-stage near-end moves", () => {
+    for (const committed of [false, true]) for (const resize of [20, -20, 0]) {
+      const target = scrollTarget();
+      target.scrollTop = 380;
+      const points: [number, number][] = committed
+        ? [[200, 300], [260, 310], [300, 320]] : [[200, 300], [220, 310], [270, 330]];
+      expect(stroke(points, false, target, () => {
+        layoutScroll(target as unknown as HTMLElement, () => {
+          target.scrollHeight += resize;
+          target.scrollTop += resize / 2;
+          layoutScroll(target as unknown as HTMLElement, () => { target.scrollTop += resize / 2; });
+        });
+        layoutScroll(target as unknown as HTMLElement, () => { target.scrollTop = target.scrollHeight - target.clientHeight; });
+        listeners.get("scroll")!({ target });
+      })).toEqual({ reached: committed ? 0 : 1, calls: [true] });
+    }
+  });
+
+  test("native movement cannot be hidden by an automatic absolute write before its scroll event arrives", () => {
+    for (const committed of [false, true]) {
+      const target = scrollTarget();
+      const points: [number, number][] = committed
+        ? [[200, 300], [260, 310], [300, 320]] : [[200, 300], [220, 310], [270, 330]];
+      expect(stroke(points, false, target, () => {
+        target.scrollTop -= 10;
+        layoutScroll(target as unknown as HTMLElement, () => { target.scrollTop = 400; });
+      })).toEqual({ reached: committed ? 1 : 2, calls: committed ? [true, false] : [] });
+    }
+  });
+
+  test("a native scroll after an automatic write still wins", () => {
+    const target = scrollTarget();
+    expect(stroke([[200, 300], [260, 310], [300, 320]], false, target, () => {
+      layoutScroll(target as unknown as HTMLElement, () => { target.scrollTop += 20; });
+      target.scrollTop -= 10;
+      listeners.get("scroll")!({ target });
+    })).toEqual({ reached: 1, calls: [true, false] });
+  });
+
+  test("a browser clamp to a shorter end needs no layout notification", () => {
+    const target = scrollTarget();
+    target.scrollTop = 380;
+    expect(stroke([[200, 300], [260, 310], [300, 320]], false, target, () => {
+      target.scrollHeight = 400;
+      target.scrollTop = 300;
+      listeners.get("scroll")!({ target });
+    })).toEqual({ reached: 0, calls: [true] });
+  });
+
+  test("a native scroll at lift or after lift cannot leave an interior drawer open", () => {
+    for (const phase of ["at-lift", "after-lift", "after-layout"] as const) {
+      const target = scrollTarget();
+      const drawer = { style: {}, getBoundingClientRect: () => ({ width: 300 }) };
+      (document as unknown as { getElementById(): unknown }).getElementById = () => drawer;
+      let open = false;
+      const stop = watchDrawerSwipe(() => open, (next) => { open = next; });
+      listeners.get("touchstart")!({ touches: [{ clientX: 200, clientY: 300 }], target, timeStamp: 0 });
+      listeners.get("touchmove")!({ touches: [{ clientX: 270, clientY: 310 }], cancelable: false, stopPropagation() {}, timeStamp: 100 });
+      expect(open).toBe(true);
+      if (phase === "at-lift") target.scrollTop -= 10;
+      listeners.get("touchend")!({ touches: [], timeStamp: 250 });
+      if (phase === "after-layout") {
+        layoutScroll(target as unknown as HTMLElement, () => { target.scrollTop += 50; });
+        listeners.get("scroll")!({ target });
+        expect(open).toBe(true);
+      }
+      if (phase !== "at-lift") {
+        target.scrollTop -= 10;
+        listeners.get("scroll")!({ target });
+      }
+      expect(open).toBe(false);
+      stop();
+    }
+  });
+
+  test("the next interaction releases the previous opening's origin", () => {
+    const target = scrollTarget();
+    (document as unknown as { getElementById(): unknown }).getElementById = () => ({ style: {}, getBoundingClientRect: () => ({ width: 300 }) });
+    let open = false;
+    const stop = watchDrawerSwipe(() => open, (next) => { open = next; });
+    listeners.get("touchstart")!({ touches: [{ clientX: 200, clientY: 300 }], target, timeStamp: 0 });
+    listeners.get("touchmove")!({ touches: [{ clientX: 270, clientY: 300 }], cancelable: false, stopPropagation() {}, timeStamp: 100 });
+    listeners.get("touchend")!({ touches: [], timeStamp: 250 });
+    expect(open).toBe(true);
+    listeners.get("touchstart")!({ touches: [{ clientX: 200, clientY: 300 }], target: null, timeStamp: 300 });
+    target.scrollTop -= 10;
+    listeners.get("scroll")!({ target });
+    expect(open).toBe(true);
+    stop();
+  });
+
+  test("programmatic scrolling of overflow-hidden ancestors is not a native scroll", () => {
+    const globals = globalThis as unknown as Record<string, unknown>;
+    const savedStyle = globals["getComputedStyle"];
+    globals["getComputedStyle"] = () => ({ overflowX: "hidden", overflowY: "hidden" });
+    try {
+      const target = scrollTarget();
+      expect(stroke([[200, 300], [220, 310], [270, 330]], false, target,
+        () => { target.scrollTop = 90; })).toEqual({ reached: 1, calls: [true] });
+    } finally {
+      if (savedStyle === undefined) delete globals["getComputedStyle"];
+      else globals["getComputedStyle"] = savedStyle;
+    }
+  });
+
+  test("ownership reaches a connected ancestor after a renderer replaces the original row", () => {
+    const row = Object.assign(new EventTarget(), { isConnected: false });
+    const host = Object.assign(new EventTarget(), { isConnected: true });
+    let rowClaims = 0;
+    let hostClaims = 0;
+    row.addEventListener(TOUCH_STROKE_CLAIMED, () => rowClaims++);
+    host.addEventListener(TOUCH_STROKE_CLAIMED, () => hostClaims++);
+    claimTouchStroke([row, host]);
+    expect(rowClaims).toBe(0);
+    expect(hostClaims).toBe(1);
+  });
+
+  test("page-level scrolling also wins an undecided interior gesture", () => {
+    const view = (globalThis as Record<string, unknown>)["window"] as Record<string, unknown>;
+    expect(stroke([[200, 300], [220, 310], [270, 330]], false, null,
+      () => { view["scrollY"] = 10; })).toEqual({ reached: 2, calls: [] });
   });
 
   test("a vertical stroke from mid-screen belongs to the page", () => {

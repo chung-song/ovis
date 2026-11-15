@@ -1,3 +1,4 @@
+import { layoutScroll } from "../lib/layoutScroll.ts";
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { createPortal, flushSync } from "react-dom";
 import {
@@ -1473,7 +1474,7 @@ function TerminalSnapshot({ text }: { text: string }) {
     if (pinned !== null || !followOnRelease.current) return;
     followOnRelease.current = false;
     const view = section.current?.closest<HTMLElement>(".chat-view");
-    if (view) view.scrollTop = view.scrollHeight;
+    if (view) layoutScroll(view, () => { view.scrollTop = view.scrollHeight; });
   }, [pinned]);
   return <section ref={section} className="chat-terminal-snapshot" aria-label={t("Terminal")} data-newer-read={shown !== text ? "" : undefined}>
     <div className="chat-terminal-snapshot-head"><span><SquareTerminal aria-hidden="true" />{t("Terminal")}</span>
@@ -2285,7 +2286,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const node = scroller.current;
     if (node !== null && stickToBottom.current && !selecting.current) {
       if (state.source === "conversation") timeline.current?.scrollToEnd({ animated: false });
-      else node.scrollTop = node.scrollHeight;
+      else layoutScroll(node, () => { node.scrollTop = node.scrollHeight; });
     }
   }, [state, prompt, agentStatus, connected, ended]);
 
@@ -2313,7 +2314,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
         // painted now would show the conversation's last lines under a composer that grew a line.
         // This callback runs before that paint: put the view at the end here, then let the list
         // settle its own scroll state.
-        node.scrollTop = node.scrollHeight;
+        layoutScroll(node, () => { node.scrollTop = node.scrollHeight; });
         if (timeline.current) timeline.current.scrollToEnd({ animated: false });
       }
       measureEndRef.current();
@@ -2334,7 +2335,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const node = scroller.current;
     if (node !== null && stickToBottom.current && !selecting.current) {
       if (timeline.current) timeline.current.scrollToEnd({ animated: false });
-      else node.scrollTo({ top: node.scrollHeight, behavior: "instant" });
+      else layoutScroll(node, () => node.scrollTo({ top: node.scrollHeight, behavior: "instant" }));
     }
   }, [faces]);
   // a tap or a drag down the transcript puts a phone's keyboard away to read (lib/keyboard.ts)
@@ -2494,9 +2495,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     // what they just clicked is laid out where they are (ChatTimeline manualLayout)
     if ((heldInPlace || stoppedShort) && stickToBottom.current && !pagingAway.current && !manualLayout.current && !selecting.current && distanceFromBottom > LAYOUT_ALLOWANCE_PX) {
       // the list's scroll lands a frame later: the frame painted next is at the end already
-      if (stoppedShort) node.scrollTop = node.scrollHeight;
+      if (stoppedShort) layoutScroll(node, () => { node.scrollTop = node.scrollHeight; });
       if (timeline.current) timeline.current.scrollToEnd({ animated: false });
-      else node.scrollTo({ top: node.scrollHeight, behavior: "instant" });
+      else layoutScroll(node, () => node.scrollTo({ top: node.scrollHeight, behavior: "instant" }));
     }
     // A downward automatic scroll may arrive before the next measured layout.
     // Only upward movement can turn an existing follow intent into reading intent.

@@ -1172,7 +1172,19 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   shows or a flick (`0.35` px/ms, not after a `100ms` rest) went that way, and slides the rest from there.
   An interior opening released at or beyond `56px` stays open even when less than half shows,
   so a slow stroke near the right edge works; reversing below that threshold or flicking left
-  can still close it. Edge-started strokes keep their original settling behavior.
+  can still close it. Edge-started strokes keep their original settling behavior. The opening
+  yields if a scrollable origin or the page has moved, including a compositor scroll delivered
+  after the claim or lift. A settled interior opening keeps its origin until the next touch
+  or close, so delayed native scrolling cannot continue behind it. Instant automatic chat scrolling announces its actual writes through
+  `layoutScroll` and the LegendList patch, including delayed end follows and row adjustments.
+  Before a write the gesture checks for an unread native scroll; after it the gesture rebases
+  its origin. Nested writes share that interval. Terminal cursor follows and fit corrections use
+  the same layout notifications. A browser clamp to a shorter end also rebases.
+  This keeps opening available while an answer streams, including near-end and two-stage follows,
+  without excusing a reader's scroll. Smooth scrolling and explicit reader navigation still yield.
+  A committed interior opening tells its connected origin to discard pending touch work:
+  terminal remainder pixels and queued wheel reports cannot escape at the lift. Native end/cancel
+  events still reach their consumers to finish pinch, reorder and other gesture cleanup.
 - The terminal stack contains a positioned terminal surface, then composer or key bar. The xterm
   mount stays alive under the chat lens; changing views never creates a second connection.
 - At `<=480px` the brand name, the offline pill and desktop-only control labels go, and the

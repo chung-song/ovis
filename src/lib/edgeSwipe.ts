@@ -10,27 +10,18 @@ import { claimTouchStroke } from "./touchClaim.ts";
  *
  * While the finger is down the drawer is under it, as an iPhone's is: it moves with the
  * stroke rather than playing a slide of its own, and where it is let go, and how fast, decide
- * whether it stays open (`drawerSettles`). The stylesheet's slide then carries it the rest
- * of the way from there.
+ * whether it stays open (`drawerSettles`).
  */
 
 /** Inside this left edge, an opening stroke keeps the looser horizontal angle. */
 export const EDGE_PX = 24;
-/** How far a finger travels sideways before the drawer opens or closes. */
 export const SWIPE_PX = 56;
-/** Movement below this is not a direction yet. */
 const SLOP_PX = 10;
-/** A flick at least this fast (px per ms) settles the drawer the way it went, wherever it is let go. */
 export const FLING_SPEED = 0.35;
-/** A finger that rests this long before it lifts has stopped: it lets go with no flick. */
 const REST_MS = 100;
 
 export type SwipeVerdict = "open" | "close" | "claim" | "pending" | "ignore";
 
-/**
- * What a stroke from (startX) that has moved (dx, dy) means. "claim" is a recognised
- * swipe still short of SWIPE_PX: the caller keeps it from scrolling what lies under it.
- */
 export function swipeVerdict(drawerOpen: boolean, startX: number, dx: number, dy: number): SwipeVerdict {
   if (Math.abs(dx) < SLOP_PX && Math.abs(dy) < SLOP_PX) return "pending";
   if (Math.abs(dy) >= Math.abs(dx)) return "ignore";
@@ -44,20 +35,12 @@ export function swipeVerdict(drawerOpen: boolean, startX: number, dx: number, dy
   return "ignore";
 }
 
-/**
- * Whether a drawer let go with `shown` px of its `width` on screen, moving at `speed` px/ms
- * (rightward positive), stays open: a flick decides, else whether more than half of it shows.
- */
 export function drawerSettles(shown: number, width: number, speed: number): boolean {
   if (speed >= FLING_SPEED) return true;
   if (speed <= -FLING_SPEED) return false;
   return shown > width / 2;
 }
 
-/**
- * A dialog, the palette or a sheet is up: a swipe there is theirs, not the drawer's under them. The phone's
- * drawer is a modal dialog itself while it is out (App.tsx): that one is the drawer, and its swipe closes it.
- */
 const MODAL = "[aria-modal='true']:not(#workspace-drawer), dialog[open]";
 
 /** Something under the finger scrolled sideways, a code block or a table: a swipe right scrolls it back. */
@@ -112,7 +95,6 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   // a recognised swipe owns the stroke until the finger lifts, after the drawer moved too
   let claimed = false;
   let done = false;
-  // what the drawer is set to now, and where the finger has it: its width on screen, and how fast it moved
   let state = false;
   let follow: { drawer: HTMLElement; scrim: HTMLElement | null; width: number; shown: number; x: number; at: number; speed: number } | null = null;
   let restoreScroll: (() => void) | null = null;
@@ -227,7 +209,6 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
       throw error;
     }
   };
-  /** Puts the drawer under the finger, `dx` from where the stroke began. */
   const track = (dx: number, x: number, at: number): void => {
     if (start === null) return;
     if (follow === null) {
@@ -237,7 +218,6 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
       // a flick may lift after one move: its speed so far is measured from where the finger came down
       const speed = at > start.at ? (x - start.x) / (at - start.at) : 0;
       follow = { drawer, scrim, width: drawer.getBoundingClientRect().width, shown: 0, x, at, speed };
-      // the stroke draws the drawer now: no slide of the stylesheet's, and shown even while it is closing
       drawer.style.transition = "none";
       drawer.style.visibility = "visible";
       if (scrim !== null) scrim.style.transition = "none";
@@ -273,7 +253,6 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     const open = forcedState ?? ((interiorOpening && speed > -FLING_SPEED) || drawerSettles(held.shown, held.width, speed));
     if (open !== state) setOpen(open);
     state = open;
-    // the stylesheet's slide takes it from where the finger left it to where it settles
     held.drawer.style.transition = "";
     held.drawer.style.visibility = "";
     held.drawer.style.transform = "";

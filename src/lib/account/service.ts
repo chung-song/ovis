@@ -107,11 +107,34 @@ export interface AccountIdentity {
 /** A refresh this long before the access token runs out, so a request never leaves with one about to. */
 const REFRESH_EARLY_MS = 60_000;
 
+/** `retryAfterMs`: the wait the answer's `retry-after` named (a 429's), or null without one. */
 export class AccountServiceError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
+  constructor(readonly status: number, readonly code: string, message: string, readonly retryAfterMs: number | null = null) {
     super(message);
     this.name = "AccountServiceError";
   }
+}
+
+/**
+ * A request to the account service got no answer at all: the connection dropped under it, or the network was down or
+ * changed. Any HTTP answer is an AccountServiceError (or a sign-out) instead. Still a TypeError, as fetch's own failure is.
+ */
+export class AccountServiceUnreachableError extends TypeError {
+  constructor(options: { readonly cause: unknown }) {
+    super("The account service could not be reached", options);
+    this.name = "AccountServiceUnreachableError";
+  }
+}
+
+/**
+ * How a request is sent again (relay/networkRetry.ts): `sends` HTTP sends in all, the first included; `before` runs
+ * immediately before each (its number, from 1), after any token refresh, and ends the request by throwing; `wait` runs
+ * after a send that got no answer or a 429, and says whether the next goes.
+ */
+export interface SendAgain {
+  readonly sends: number;
+  readonly before: (send: number) => Promise<void>;
+  readonly wait: (error: AccountServiceError | AccountServiceUnreachableError, sent: number) => Promise<boolean>;
 }
 
 /** The sign-in is gone (revoked, expired past refresh, or never made): the client is signed out. */
@@ -155,7 +178,16 @@ export async function failure(response: Response): Promise<AccountServiceError> 
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
   }
-  return new AccountServiceError(response.status, code, `The account service answered ${response.status} (${code})`);
+  return new AccountServiceError(response.status, code, `The account service answered ${response.status} (${code})`, retryAfterMs(response.headers.get("retry-after")));
+}
+
+/** A `retry-after` in delay-seconds or as an HTTP date, in ms from now; null without one either reads. */
+function retryAfterMs(header: string | null): number | null {
+  if (header === null || header.trim() === "") return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return seconds >= 0 ? seconds * 1000 : null;
+  const at = Date.parse(header);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null;
 }
 
 export function parseAccountLimits(value: unknown): AccountLimits | null {
@@ -240,7 +272,11 @@ export class AccountService {
   private readonly lock: AccountLock;
 
   constructor(private readonly options: AccountServiceOptions) {
-    this.fetch = options.fetch ?? ((input, init) => fetch(input, init));
+    const send: Fetch = options.fetch ?? ((input, init) => fetch(input, init));
+    // fetch fails with a TypeError only when no answer came (an abort is a DOMException, and passes as it is)
+    this.fetch = (input, init) => send(input, init).catch((error: unknown) => {
+      throw error instanceof TypeError ? new AccountServiceUnreachableError({ cause: error }) : error;
+    });
     this.now = options.now ?? Date.now;
     this.lock = options.lock ?? accountLock;
   }
@@ -278,16 +314,16 @@ export class AccountService {
     return new AccountService({ ...this.options, signIn: session });
   }
 
-  async listPcs(): Promise<DirectoryPc[]> {
-    const body = await this.call("GET", "/v1/pcs");
+  async listPcs(signal?: AbortSignal, again?: SendAgain): Promise<DirectoryPc[]> {
+    const body = await this.call("GET", "/v1/pcs", undefined, signal, again);
     const pcs = isRecord(body) && Array.isArray(body.pcs) ? body.pcs : null;
     if (pcs === null) throw new AccountServiceError(502, "invalid_answer", "The account service sent no PC list");
     return pcs.map(parsePc).filter((pc): pc is DirectoryPc => pc !== null);
   }
 
   /** Lists a PC in the account's directory, with its relay key and relay so a new device can compare digits with it. */
-  async putPc(serverId: string, entry: { label: string; public_key: string; relay: string }): Promise<void> {
-    await this.call("PUT", `/v1/pcs/${serverId}`, entry);
+  async putPc(serverId: string, entry: { label: string; public_key: string; relay: string }, signal?: AbortSignal, again?: SendAgain): Promise<void> {
+    await this.call("PUT", `/v1/pcs/${serverId}`, entry, signal, again);
   }
 
   async deletePc(serverId: string): Promise<void> {
@@ -297,9 +333,12 @@ export class AccountService {
   /**
    * Says this signed-in device waits at that PC with its account key: the account's other devices
    * hear of it, and the PC takes a comparison that asks to join the account for 10 minutes.
+   * `quiet`: asks the account service to take it as a quiet admission. The service decides: it honours
+   * the ask only for a sign-in made in an app itself, and takes any other as an ordinary admission; a service that
+   * does not know the field ignores it.
    */
-  async postAdmission(serverId: string, label: string, key: string, os: AccountOs | null = null): Promise<void> {
-    await this.call("POST", "/v1/admissions", { server_id: serverId, label, key, ...(os === null ? {} : { os }) });
+  async postAdmission(serverId: string, label: string, key: string, os: AccountOs | null = null, signal?: AbortSignal, { quiet = false }: { quiet?: boolean } = {}): Promise<void> {
+    await this.call("POST", "/v1/admissions", { server_id: serverId, label, key, ...(os === null ? {} : { os }), ...(quiet ? { quiet: true } : {}) }, signal);
   }
 
   /**
@@ -460,38 +499,80 @@ export class AccountService {
     return carried;
   }
 
-  /** A session whose access token is good, refreshing once between tabs; `stale` is a token the service just refused. */
-  private async fresh(stale?: string): Promise<AccountSession> {
+  /**
+   * A session whose access token is good, refreshing once between tabs; `stale` is a token the service just refused.
+   * `signal` bounds this caller's wait, the wait for the lock included: work not begun by then is skipped, and a
+   * refresh already sent finishes, so the token it rotated is kept for the next call.
+   */
+  private async fresh(stale?: string, signal?: AbortSignal): Promise<AccountSession> {
+    signal?.throwIfAborted();
     // bound to a sign-in that is no longer the stored one: the stored one is someone else's to use or end
     const foreign = (session: AccountSession | undefined): boolean => this.options.signIn !== undefined && (session === undefined || !sameSignIn(session, this.options.signIn));
     const session = await this.session();
     if (foreign(session)) throw new SignedOutError();
     if (session === undefined) return this.signedOut();
     if (stale === undefined && session.expires_at - REFRESH_EARLY_MS > this.now()) return session;
-    return this.lock(async () => {
+    return this.locked(async () => {
       const current = await this.session();
       if (foreign(current)) throw new SignedOutError();
       if (current === undefined) return this.signedOut();
       // another tab refreshed while this one waited: its tokens are the ones to use
       if (current.access_token !== (stale ?? session.access_token)) return current;
       return this.refreshed(current);
+    }, signal);
+  }
+
+  /** The lock between tabs, with `signal` bounding the wait for it: work that was not begun by then never begins. */
+  private locked<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal === undefined) return this.lock(work);
+    signal.throwIfAborted();
+    const run = this.lock(async () => { signal.throwIfAborted(); return work(); });
+    return new Promise<T>((resolve, reject) => {
+      const stop = (): void => reject(signal.reason);
+      signal.addEventListener("abort", stop, { once: true });
+      run.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
     });
   }
 
-  private async call(method: string, path: string, body?: unknown): Promise<unknown> {
+  /**
+   * `signal`: ends the request itself, not only the wait for it (a post given up must not land later). `again`: this
+   * request, and only it, is sent again after no answer or a 429 (a token refresh under it never is), within
+   * `again.sends` HTTP sends in all, a send after a 401 included. Without it a 401 is sent again once, as always.
+   */
+  private async call(method: string, path: string, body?: unknown, signal?: AbortSignal, again?: SendAgain): Promise<unknown> {
     let stale: string | undefined;
-    for (const retry of [false, true]) {
-      const session = await this.fresh(stale);
-      const response = await this.fetch(new URL(path, session.service), {
-        method,
-        headers: { authorization: `Bearer ${session.access_token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      });
-      if (response.status === 401 && !retry) { stale = session.access_token; continue; }
+    let refreshed = false;
+    const sends = again?.sends ?? 2;
+    for (let sent = 1; ; sent++) {
+      const session = await this.fresh(stale, signal);
+      await again?.before(sent);
+      // nothing is awaited between this and the send
+      signal?.throwIfAborted();
+      let response: Response;
+      try {
+        response = await this.fetch(new URL(path, session.service), {
+          method,
+          headers: { authorization: `Bearer ${session.access_token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          ...(signal === undefined ? {} : { signal }),
+        });
+      } catch (error) {
+        if (again !== undefined && error instanceof AccountServiceUnreachableError && sent < sends && await again.wait(error, sent)) continue;
+        throw error;
+      }
+      if (response.status === 401 && !refreshed) {
+        if (sent >= sends) throw await failure(response);
+        refreshed = true;
+        stale = session.access_token;
+        continue;
+      }
       if (response.status === 401) return this.signedOut(session);
-      if (!response.ok) throw await failure(response);
+      if (!response.ok) {
+        const refusal = await failure(response);
+        if (again !== undefined && refusal.status === 429 && sent < sends && await again.wait(refusal, sent)) continue;
+        throw refusal;
+      }
       return response.status === 204 ? null : response.json();
     }
-    return this.signedOut();
   }
 }

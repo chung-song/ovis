@@ -86,7 +86,6 @@ describe.each(Object.entries(DICTIONARIES))("%s state words", (_name, dictionary
   it.each([
     ["Ready", "Ready · not in the account yet"],
     ["Offline", "Offline · {when}"],
-    ["Offline", "{name} is offline"],
     ["Not checked", "Paired · not checked"],
   ])("reuses the %p word inside %p", (word, composed) => {
     expect(dictionary[composed]).toBeString();
@@ -162,6 +161,7 @@ const PART_FILES: Record<string, string[]> = {
   guide: ["components/SetupGuide.tsx"],
   relay: ["components/RelayShell.tsx", "components/RelayShellScreens.tsx", "components/AccountPcs.tsx", "lib/relay/shell.tsx", "lib/relay/accountController.ts", "components/relayFailureText.ts"],
   dashboard: ["components/AddPcSheet.tsx", "components/RelayDashboard.tsx", "components/RelayMap.tsx", "components/RelayPcTable.tsx", "components/RelayPcDetails.tsx", "components/RelayOverview.tsx", "components/relayMapLayout.ts", "components/relayPcState.tsx"],
+  "my-machines": ["components/MyMachines.tsx", "components/MyMachinesParts.tsx", "components/MyMachinesList.tsx", "components/MyMachineDetails.tsx", "components/AddMachineSheet.tsx", "components/myMachinesWords.ts"],
   "runtime-move": ["components/RuntimeMove.tsx", "components/RuntimeMoveViews.tsx", "lib/runtimeMove.ts"],
 };
 
@@ -197,7 +197,7 @@ describe("dictionary parts", () => {
   });
 
   it("writes Korean particles per word, never as a dual-particle template", () => {
-    const relayFiles = [...(PART_FILES.relay ?? []), ...(PART_FILES.dashboard ?? []), "components/RelayPairingPrompt.tsx", "components/AccountApprovalPrompt.tsx"];
+    const relayFiles = [...(PART_FILES.relay ?? []), ...(PART_FILES.dashboard ?? []), ...(PART_FILES["my-machines"] ?? []), "components/RelayPairingPrompt.tsx", "components/AccountApprovalPrompt.tsx"];
     const templated = [...keysInCode()]
       .filter(([, files]) => files.every((file) => relayFiles.includes(file)))
       .map(([key]) => key)

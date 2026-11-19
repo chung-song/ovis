@@ -5078,7 +5078,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   account the part has no button and no QR code: its label says which account (the browser's own,
   another one, or one it cannot tell while signed out), one sentence says to sign in to that
   account on the device, and a hint says the QR code is only for a PC in no account; the
-  relay's switch stays above while the relay is not online. Linked-device apps draw the same
+  relay's switch stays above while the relay is not online. On a PC that no account was named
+  for, one hint line (`.settings-hint`) stands where the button would be: to sign in above first,
+  or, signed in, to add the PC to the account first. It is the line the part already shows when
+  the relay asks for a pass, so the tab says in one way that an account comes first.
+  Linked-device apps draw the same
   line (WhatsApp shows its linking QR code on the device being added, never on one already
   linked), and it is deliberate here: a QR code on a PC with members would let in whoever scans
   it with nobody approving. Relay pairing without the
@@ -5831,6 +5835,29 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   label, autofocused field, primary Unlock button and linked alert text.
 - Success mounts the shell; Lock unsubscribes push, deletes auth and returns to the gate.
 
+### My machines (`.acct-*`)
+- `#my-machines` opens the signed-in machine list in the hosted shell. The front page stays the
+  relay dashboard. `MyMachinesPage` adapts the account directory, local pairings and connection
+  checks already held by the shell; the screens make no requests of their own. Today's source
+  does not offer Devices, Invites or removal.
+- Layout: a section nav beside one column of rows -> the relay dashboard's shell; scroll owner:
+  the document. On a phone its bottom tab stays clear of the last row. A machine's details open
+  beside the list from 1100 px and replace it below that width, with Back and focus returned to
+  the row. Add a machine is a dialog, a bottom sheet at 640 px and under; its `.modal-body`
+  scrolls and the page behind it is inert.
+- **Add a machine** is the primary action. The list puts machines that need attention first; PCs
+  follow under **My PCs** when both kinds are present. Each row gives the name, state glyph and
+  word, why it cannot open, engine and route when known. **Open** is offered for a ready or
+  unchecked machine, and for one that needs an update but knows this device. **Try again** is
+  offered when the machine could not be reached; **Join** uses the shell's existing way in.
+- Details show State, Engine, Route, Kind, Came in, Own Ovis when applicable, Account list when
+  known, and Key ID. Today's add sheet shows `ovis add` and **Copy**, followed by what the
+  command does. The isolated fixture also exercises the signed-list form of the sheet: the
+  command and the bare join line are separate, with the waiting and joined states below them.
+- Follows Tailscale's admin console in putting machine state and the next available action in
+  the list. Codex, Claude, Paseo, T3 Code, Zed, Warp and Conductor have no equivalent account
+  machine list. The screen uses Ovis's dashboard, details and dialog styles.
+
 ### Relay shell (`.relay-shell*`)
 - The hosted shell's screens before the app (components/RelayShell.tsx, lib/relay/shell.tsx): the
   token gate's card, one sidebar wide on `--bg`, the sheep mark, a `--fs-lg` title that says what
@@ -5838,7 +5865,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   width (`.btn`, the one primary action `.btn-primary`). No entrance motion; the connecting
   state's `.boot-spinner` is the only thing that moves. Every screen names itself in
   `data-relay-state` on the `<main>` (`list`, `empty`, `confirm`, `connecting`, `pc-offline`,
-  `pc-unresponsive`, `relay-unreachable`, `needs-update`, `revoked`, `identity-changed`,
+  `pc-unresponsive`, `relay-unreachable`, `relay-refused`, `needs-update`, `revoked`, `identity-changed`,
   `forgotten`, `code-expired`, `bad-offer`) for the browser scripts. Which of the three silences a stalled
   connection is comes from the channel's phase (lib/relay/channel.ts): the relay that never
   assigned the connection (10 s) is unreachable, the PC that never answered once it had (15 s) is

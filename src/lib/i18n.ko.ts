@@ -19,6 +19,7 @@ import { UPDATES_KO } from "./i18n/updates.ko.ts";
 import { PALETTE_KO } from "./i18n/palette.ko.ts";
 import { RELAY_KO } from "./i18n/relay.ko.ts";
 import { DASHBOARD_KO } from "./i18n/dashboard.ko.ts";
+import { MY_MACHINES_KO } from "./i18n/my-machines.ko.ts";
 import { RUNTIME_MOVE_KO } from "./i18n/runtime-move.ko.ts";
 
 /**
@@ -543,10 +544,13 @@ const BASE: Record<string, string> = {
   "Forget this PC?": "이 PC를 잊을까요?",
   "This phone's key for it is deleted here, and the PC keeps listing this phone until it is revoked there. Pairing again takes a new QR code from the PC.": "이 폰에서 해당 키를 삭제합니다. PC에서는 폐기하기 전까지 이 폰이 목록에 남습니다. 다시 페어링하려면 PC의 새 QR 코드가 필요합니다.",
   "Forget": "잊기",
-  "Offline · {when}": "오프라인 · {when}",
-  "The PC is off, or Ovis is not running on it.": "PC가 꺼져 있거나 Ovis가 실행 중이 아닙니다.",
-  "The relay did not answer. Check this device's network.": "릴레이가 답하지 않습니다. 이 기기의 네트워크를 확인하세요.",
+  "No answer": "응답 없음",
   "Ready · not in the account yet": "준비됨 · 아직 계정에 없음",
+  "Machine offline": "머신 오프라인",
+  "Could not reach this machine": "이 머신에 연결할 수 없음",
+  "Last seen {when}.": "{when} 마지막으로 확인되었습니다.",
+  "It is off, has no network, or Ovis is not running on it.": "전원이 꺼져 있거나, 네트워크가 없거나, Ovis가 실행되고 있지 않습니다.",
+  "This device could not reach the relay. Check this device's network.": "이 기기에서 릴레이에 연결하지 못했습니다. 이 기기의 네트워크를 확인하세요.",
   "Account setup is incomplete.": "계정 설정이 완료되지 않았습니다.",
   "Adding it to your account…": "계정에 추가하는 중…",
   "{name} is ready to open on this device.": "이제 이 기기에서 {name}에 연결할 준비가 됐습니다.",
@@ -625,6 +629,7 @@ export const KO_PARTS: Record<string, Record<string, string>> = {
   palette: PALETTE_KO,
   relay: RELAY_KO,
   dashboard: DASHBOARD_KO,
+  "my-machines": MY_MACHINES_KO,
   "runtime-move": RUNTIME_MOVE_KO,
 };
 

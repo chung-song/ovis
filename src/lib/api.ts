@@ -285,22 +285,35 @@ export function fetchRelay(): Promise<RelayStatus> {
 export interface RelayOffer {
   readonly url: string;
   readonly expires_at: string;
+  /** asked for with `x-ovis-no-account-only`: the account named for the PC as it made this code. Absent from an older server */
+  readonly account?: string | null;
 }
 
 /**
  * The relay actions answer with the state they left the relay in, a refusal too: a start that
  * serve-only blocks is a 409 whose body is still the RelayStatus, so it is the answer, not an error.
  * Only a body without a phase (the origin gate, a watching device, an older server) is one.
+ * A start gives up after 20 s (the server starts the relay at once and answers), so one that never answers does not
+ * hold Turn on, or the setup guide's other ways. A stop or a reset may take the server longer, and is waited for.
  */
 export async function requestRelay(action: "start" | "stop" | "reset-identity"): Promise<RelayStatus> {
   const url = `/api/relay/${action}`;
-  const response = await apiFetch(url, { method: "POST", headers: { "x-herdr-update": "1" } });
-  if (!response.ok) {
-    const body: unknown = await response.clone().json().catch(() => null);
-    if (body !== null && typeof body === "object" && "phase" in body) return body as RelayStatus;
-    throw await errorFrom(url, response);
-  }
-  return (await response.json()) as RelayStatus;
+  const bounded = new AbortController();
+  // kept here too: Safari before 15.4 has no signal.reason
+  let gaveUp: DOMException | null = null;
+  const timer = action === "start" ? setTimeout(() => { gaveUp = new DOMException(t("No answer"), "TimeoutError"); bounded.abort(gaveUp); }, 20_000) : undefined;
+  try {
+    const response = await apiFetch(url, { method: "POST", headers: { "x-herdr-update": "1" }, signal: bounded.signal });
+    if (!response.ok) {
+      const body: unknown = await response.clone().json().catch(() => null);
+      if (body !== null && typeof body === "object" && "phase" in body) return body as RelayStatus;
+      throw await errorFrom(url, response);
+    }
+    return (await response.json()) as RelayStatus;
+  } catch (error) {
+    // a browser may answer the abort with its own words (Safari 14): the deadline's are ours
+    throw gaveUp ?? error;
+  } finally { clearTimeout(timer); }
 }
 
 /** POST /api/relay/direct: whether paired phones may connect straight to this PC on its networks while the relay is on. */
@@ -310,7 +323,8 @@ export function requestRelayDirect(on: boolean): Promise<RelayStatus> {
 
 /**
  * `noAccountOnly`: the offer is to put this PC in an account (the relay tab's QR code). The PC then makes it only while
- * it is in no account, answers 409 `in_account` once it is in one, and ends the offer's code when it joins one.
+ * it is in no account, answers 409 `in_account` once it is in one, and ends the offer's code when it joins one. It
+ * makes none before an account is named for it either (409 `no_account_named`; RelayStatus `account_named`).
  */
 export function requestRelayOffer({ noAccountOnly = false }: { noAccountOnly?: boolean } = {}): Promise<RelayOffer> {
   return getJson<RelayOffer>("/api/relay/offer", { method: "POST", headers: { "x-herdr-update": "1", ...(noAccountOnly ? { "x-ovis-no-account-only": "1" } : {}) } });

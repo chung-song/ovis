@@ -1622,7 +1622,7 @@ function shownBlocks(text: string): string[] {
     else if (open && /^(?:\s|$)/.test(line)) blocks[blocks.length - 1] += `\n${line}`;
     else if (line.trim() !== "") { blocks.push(line.replace(/^[\u2022\u25e6]\s?/, "")); open = true; }
   }
-  return blocks.map(markedDisplay);
+  return blocks;
 }
 
 interface Anchor { anchor: string; words: string[]; marked: string; whole: RegExp }
@@ -1710,7 +1710,8 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   const answerParts = partsOf(screen);
   const texts = blocks ? answerParts : [answerParts.join("\n")];
   const displays = texts.map(normalizeDisplay);
-  const wholeBlocks = answerParts.flatMap(shownBlocks);
+  const renderedBlocks = answerParts.flatMap(shownBlocks);
+  const wholeBlocks = renderedBlocks.map(markedDisplay);
   const parsed = candidates.map(turnsOf);
   const footed = blocks ? null : footedAnswer(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))));
   const turn = footed === null ? null : footedTurnOwner(footed, candidates, displays, footerOwners);
@@ -1731,6 +1732,10 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
       const found = answerAnchor(text);
       return found !== null && displays.some((display) => display.includes(found.anchor))
         && (wholeBlocks.some((block) => found.whole.test(block))
+          // Commentary may contain Markdown while tools are still running, so no
+          // completed-turn footer exists yet. A whole rendered message is the
+          // same substantial evidence as a whole plain one, never just a suffix.
+          || renderedBlocks.some((block) => completedAnswerMatches(text, block))
           || (candidate.path === footedOwner && completedAnswerMatches(text, footed!.text))) ? [found] : [];
     });
     if (anchors.length === 0) continue;

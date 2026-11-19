@@ -3231,6 +3231,23 @@ describe("a Codex pane whose last answer is shorter than 64 letters and digits b
     expect(await resolve()).toBe(path);
   });
 
+  it("keeps a whole rendered commentary bound after tools scroll it away", async () => {
+    foreground = live;
+    const reply = `**The application requirements are verified against the original posting.** ${answer}`;
+    writeRollout(path, thread, turn("t0", "Inspect the application", reply, false));
+    screen = [
+      "› Inspect the application", "", `• ${reply.replaceAll("**", "")}`, "",
+      "• Ran inspect-application", "  └ Fields checked", "",
+      "• Working (4s • esc to interrupt)", "", "› Ask Codex to do anything", "",
+      "  GPT-6-Luna low · /tmp/proj",
+    ].join("\n");
+    expect(await resolve()).toBe(path);
+    screen = "• Ran another-command\n  └ More output\n\n• Working (5s • esc to interrupt)";
+    expect(await resolve()).toBe(path);
+    screen = "";
+    expect(await codexOpenRollout(root, root, home)).toBe(path);
+  });
+
   it("leaves a long answer's binding as it was when a short turn follows: kept when the screen no longer tells", async () => {
     foreground = live;
     writeRollout(path, thread, turn("t0", "Explain which conversation this pane shows", answer));

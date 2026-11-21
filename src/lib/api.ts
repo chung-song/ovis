@@ -11,7 +11,7 @@ import type { SystemReport } from "../../shared/system.ts";
 import type { MovePlanResponse, MoveStartRequest, MoveStopAllOffer, MoveStopAllRequest, MoveStopRequest } from "../../shared/runtime-move.ts";
 import type { EditableText, PaneDocuments, TextSaved, TextSaveRequest } from "../../shared/files.ts";
 import { parseSystemReport } from "./systemReport.ts";
-import { machinePath, type BridgeHealth, type HerdrCoreFacts, type HerdrIdentity, type HerdrRuntimeFacts, type Machine, type MachineRoster, type RuntimeName, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
+import { machinePath, type OwnJoinRequest, type BridgeHealth, type HerdrCoreFacts, type HerdrIdentity, type HerdrRuntimeFacts, type Machine, type MachineRoster, type PendingKey, type RuntimeName, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type {
   WorkspaceMoved,
   HerdrPane,
@@ -359,12 +359,30 @@ export function closeRelayLink(): Promise<{ readonly ok: true }> {
   return getJson<{ readonly ok: true }>("/api/relay/link/close", { method: "POST", headers: { "x-herdr-update": "1" } });
 }
 
+/** GET /api/relay/joins: account joins waiting for this PC's own window, without their digits (403 `own_window_required` elsewhere). */
+export async function fetchOwnJoins(): Promise<OwnJoinRequest[]> {
+  return (await getJson<{ readonly joins: OwnJoinRequest[] }>("/api/relay/joins")).joins;
+}
+
+/** POST /api/relay/join: the digits the new device shows, typed on this PC's own window; 409 `wrong_digits` ends that join. */
+export async function approveOwnJoin(id: string, digits: string): Promise<void> {
+  await getJson<{ readonly ok: true }>("/api/relay/join", { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify({ id, digits }) });
+}
+
 /** POST /api/relay/pairing: the owner's answer to a phone waiting with the same digits (`relay-pairings` events). */
 export async function decideRelayPairing(id: string, decision: "approve" | "decline", digits?: string): Promise<void> {
   const url = "/api/relay/pairing";
   // an account member approving through the relay names the digits it picked (docs/account.md, "Who may admit a device")
   const response = await apiFetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-update": "1" }, body: JSON.stringify({ id, decision, ...(digits === undefined ? {} : { digits }) }) });
   if (!response.ok) throw await errorFrom(url, response);
+}
+
+/** Declines one device waiting for this PC's screen (S2-34, T72); the PC answers the list that is left. Approving stays on the screen. */
+export async function declinePendingKey(id: string): Promise<readonly PendingKey[]> {
+  const url = "/api/devices/pending/decline";
+  const response = await apiFetch(url, { method: "POST", headers: { "content-type": "application/json", "x-herdr-machine": "1" }, body: JSON.stringify({ id }) });
+  if (!response.ok) throw await errorFrom(url, response);
+  return ((await response.json()) as { pending: PendingKey[] }).pending;
 }
 
 export async function fetchPreferences(): Promise<SharedPreferences | null> {
@@ -1434,6 +1452,17 @@ export async function machineRequest<T>(path: string, method = "GET", body?: unk
   if (!response.ok) throw await errorFrom("/api/machines", response);
   return response.json();
 }
+/**
+ * Asks the server to try a PC it is waiting to reconnect now: any read of a PC it has no connection to does
+ * (machine-api.ts `retryNow`), and only then; it leaves a connected PC and one a setup holds alone. The answer is
+ * that PC's roster or `machine_offline`, both expected; what the try finds arrives as the PC's next state.
+ */
+export async function askMachineRetry(id: string): Promise<void> {
+  const url = `/api/machines/${encodeURIComponent(id)}/session`;
+  const response = await apiFetch(url);
+  if (!response.ok && response.status !== 503) throw await errorFrom(url, response);
+  await response.body?.cancel();
+}
 export interface SshCandidate {
   readonly name: string; readonly destination: string; readonly detail: string | null; readonly source: "ssh_config" | "tailscale";
   readonly tailnet?: string;
@@ -1442,6 +1471,8 @@ export const findSshCandidates = () => machineRequest<{ pcs: SshCandidate[] }>("
 /** A PC of this PC's Tailscale login whose Ovis lets this PC in as its owner (server/tailnet-pcs.ts); `outdated`: older than 0.5. */
 export interface TailnetPc { readonly name: string; readonly url: string; readonly relay: string | null; readonly outdated: boolean }
 export const findTailnetPcs = () => machineRequest<{ pcs: TailnetPc[] }>("/tailnet");
+/** POST /api/machines/address: pairs with another PC's Ovis at that https address by the six-digit code it shows, and adds it. */
+export const addAddressPc = (address: string, code: string) => machineRequest<{ machine: Machine }>("/address", "POST", { address, code });
 /** Another PC of the account as the page read it from the account's directory: its key checked against its id here too. */
 export interface AccountPcEntry { readonly server_id: string; readonly server_public_key: string; readonly relay: string; readonly name: string }
 export type AccountPcState = "ready" | "outdated" | "offline";

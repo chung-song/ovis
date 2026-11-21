@@ -864,6 +864,12 @@ floor of `--fs-meta` holds at scale 1 and only grows with it.
   takes the focus on the marked entry, centered; a choice, Escape or a press outside closes it and
   the focus goes back to the button.
 - Web links from every agent's chat and terminal open in a new tab by default. The device setting `reuseExternalLinkTab` follows the Codex app's reusable-tab choice: one Ovis page keeps one external tab and replaces its address on later clicks. A browser lets a page steer a tab of another site only as its opener, so that tab keeps Ovis as its opener: the site in it can see and navigate the Ovis tab, which is why the setting is off by default and says so (Ovis's `Referrer-Policy: no-referrer` still sends no address). A new tab has no opener. If the browser refuses to steer the tab, the link opens in a new tab. Reuse is best effort: a site that sets Cross-Origin-Opener-Policy cuts the link, and the next click opens a new tab. Ctrl, Cmd and Alt clicks still open a new tab, and the iOS, Android, Mac and desktop apps, which hand links to the system browser, neither show the setting nor reuse a tab. The Web links panel choice and Shift-click behavior stay independent.
+- Browser for links (the desktop and Mac apps only, Settings → Chat → Files, under Web links): one select, the
+  system default first and named when the system says which it is, then the browsers the app found
+  on the PC (app/electron/src/browsers.ts, app/mac/Sources/OvisMac/LinkBrowsers.swift). The Codex and Claude apps, Paseo and T3 Code hand every
+  link to the system default; the row follows the system's own default-browser list instead, and
+  only for web links (`kind` link): sign-ins, Ovis pages and mailto stay with the system default.
+  The row is missing where the browser itself shows the link (a browser tab, the phone apps).
 - New agents (Settings → Agents): `claudeLaunchMode` (`--permission-mode`: `acceptEdits`,
   `auto`, `plan`, `dontAsk`, `bypassPermissions`) and `codexLaunchMode` (`readOnly`, `auto`,
   `fullAccess`, each a `--sandbox` and `--ask-for-approval` pair) become the `agent.args` the new
@@ -1015,6 +1021,10 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--relay-sidebar-w` | `240px` | — | The relay dashboard's sidebar: its own width, never the terminal sidebar's density step |
 | `--relay-content-w` | `1280px` | — | The relay dashboard's main column cap, gutters included |
 | `--relay-signin-w` | `368px` | — | The relay sign-in column |
+| `--relay-step-w` | `440px` | — | A pairing step's column (RelayStepFrame): the whole width of a phone, this on a wider screen |
+| `--relay-step-h` | `720px` | — | A pairing step's height on a wider screen, so its actions sit at the column's foot and not the window's |
+| `--relay-step-bar` | `3px` | — | The pairing step's progress bar |
+| `--relay-step-icon` | `48px` | — | The square behind a pairing card's glyph (the PC card) |
 | `--relay-sheet-w` | `520px` | — | The Add-a-PC sheet |
 | `--relay-detail-w` | `360px` | — | The PC details column from `1100px` |
 | `--relay-table-head-h` | `36px` | — | The PC table's sticky header |
@@ -3432,6 +3442,23 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Layout: one column inside the Files sheet; bar, branches line, Checks, Open review threads,
   Merge, each separated by a hairline.
 
+### Browser side panel (`.browser-side-panel`)
+- The desktop app's built-in browser keeps a right panel, 232px, beside the pane and after the
+  docked file panel, on a wide window only and only while the browser's setting is on (main
+  answers the page's bridge, `window.ovisBrowser`, with null when it is off; `lib/desktopBrowser.ts`).
+  It follows the Claude and Codex apps' artifact rail: outputs sit beside the conversation, never
+  in it. GOAT's per-thread right panel was looked at for ideas; no code was taken.
+- **Results** (`결과물`): the files the browser kept and an agent's screenshots (from main), then
+  the pages the selected Claude Code pane published (`GET /api/pane/artifacts`, the Artifacts
+  chip's own read). A file row shows it in its folder; nothing is opened. Each row: icon,
+  name, `kind · size · time` in `--fs-xs` `--text-dim`.
+- **Tabs the agents use** (`에이전트가 쓰는 탭`): one card per agent-profile tab, title and **x**
+  (closes the tab), a 96px picture main takes on request when the page settles (only of a tab it
+  draws) and keeps nowhere, then `<agent> is using it` (the agent of the pane that opened it), or
+  **You have control** in `--accent` while a person holds the tab.
+- Empty sections say what will show there in one dim line. The panel never polls the browser:
+  it follows main's change events.
+
 ### Header context and connection
 - A selected pane shows agent mark + title (`--fs-md`), then on the same line the crumb
   PC › workspace › folder (`--fs-xs`, `--text-dim`); with one PC registered the PC is left out, as
@@ -5065,13 +5092,27 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Install (a row of More settings' This device, shown only when the browser can install) offers it;
   About links the repository.
 - In the hosted relay shell (app.ovis.sh, `<meta name="ovis-shell">`, lib/shellMode.ts) the page
-  opens with a **This app** group of two rows the native build never shows: **Change PC** (a neutral button to the
-  shell's front page: the paired-PC list, or, signed out where the account service runs, the sign-in
-  screen with that list behind **Continue without an account**; the same row the iOS app gets for
-  its own list)
+  opens with a **This app** group of three rows the native build never shows: **Change PC** (a neutral button to the
+  shell's front page: Add a PC, listing this device's PCs and the account's, or, signed out where the account
+  service runs, the sign-in screen with that list behind **Start without signing in**; the same row the iOS app
+  gets for its own list), **Relayed connections** with **Manage** (a neutral button to `/#overview`, the relay
+  dashboard, which no launch, sign-in or pairing ever lands on: people open it on purpose to manage the PCs they
+  reach through the relay)
   and **Forget this PC** (a neutral button that asks once in a `ConfirmDialog`, **Forget**, then
   deletes this phone's key for the PC and leaves for the front page). Neither is destructive on the
   PC, which keeps listing the phone until it is revoked there, so neither is a `.btn-danger`.
+- The hosted shell's front page is never the dashboard. A launch opens the PC this device opened last unless its
+  check finds it off (the relay had nobody for it), then the next saved PC not found off (`launchOrder`, at most
+  four, two at a time; signed in with none saved here or every saved one found off, the account's PC opened last, else the one seen most
+  recently that has a way to join and is not off, on its own page with its join card; a check still running after four seconds, or one the relay refused, opens that PC, and when its
+  page then hears from the relay that it is off, the launch goes on to the front page, once; a PC a person opened
+  keeps its failure card and Try again; the connecting card meanwhile); every one off, a later visit, Back, a sign-in's return or the phone app's own row
+  (`#pcs` inside the app) shows Add a PC, whose list says Off or Needs approval beside a PC, as the Claude and
+  ChatGPT apps open on the last conversation and keep account pages behind Settings. The dashboard opens only by
+  its own addresses (`#overview`, `#pcs`, `#devices`, `#relay`, `#settings`), which a signed-in Add a PC offers as
+  one `.account-link` under its list (**Relayed connections**: the account's sign-out and device removal live there).
+  A launch is asked once a page; an address taken while it waits wins over it, and a page Back restores whole from
+  the browser's cache loads again rather than keep the launch's wait.
 - Portal, in Add a connection's Phones and devices tab where the server offers it: while it runs,
   the address and QR code as the Tailscale way draws them over a Relay row with Stop; otherwise one
   hint for what blocks it (no token, serve-only, no `portal` or an old one, with a link to get it)
@@ -5806,8 +5847,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Success mounts the shell; Lock unsubscribes push, deletes auth and returns to the gate.
 
 ### My machines (`.acct-*`)
-- `#my-machines` opens the signed-in machine list in the hosted shell. The front page stays the
-  relay dashboard. `MyMachinesPage` adapts the account directory, local pairings and connection
+- `#my-machines` opens the signed-in machine list in the hosted shell. The front page is Add a PC;
+  the relay dashboard opens only by its own address. `MyMachinesPage` adapts the account directory, local pairings and connection
   checks already held by the shell; the screens make no requests of their own. Today's source
   does not offer Devices, Invites or removal.
 - Layout: a section nav beside one column of rows -> the relay dashboard's shell; scroll owner:
@@ -5864,6 +5905,36 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   for the flow; the states and their words are this app's, in the token gate's own frame, so a
   phone that pairs through the relay and one that pairs with a code see the same room. Neither
   the Codex nor the Claude app has a hosted relay shell to follow.
+- Pairing steps (components/RelayStepFrame.tsx, `.relay-step*`): the confirm, the comparison, the
+  connection, the ready PC and a failed pairing leave the card for one plain page on `--bg`, a
+  column `--relay-step-w` (440 px) wide, the whole width of a phone and `--relay-step-h` (720 px)
+  tall from 600 px. Top to bottom: a round **Back** (`--space-8`, `--bg-elevated`, hairline, a
+  `--touch-target` hit area; named Cancel on a connection, which it ends; gone once this phone has
+  confirmed the digits, where the comparison's own small Cancel stays), a `--relay-step-bar` (3 px)
+  progress bar (`--text-strong` on `--border`: a third at the confirm, two thirds while it compares
+  or connects, full once the PC approved and at the ready PC; none on a failure), the mascot in an
+  80 px badge, a `--fs-display` bold title, one `--text-dim` sentence, then cards on `--bg-panel`
+  with a hairline and `--radius-lg` (the PC with a 48 px `--relay-step-icon` square, or the six
+  digits); the actions sit at the column's foot, the one primary `--accent` with `--bg-input` text
+  (6.34:1), a cancel as a small dim text button. While the comparison waits on the PC, or the
+  connection runs, a small note card with a spinner floats above **Back** ("Waiting for
+  approval…", "Connecting…"); a comparison this phone has not confirmed keeps **The numbers
+  match**, since its press is part of the pairing. The PC's ID moves under **Details** on the
+  confirm. Precedent: the step pages of the Notion iOS app's sign-up (the owner's reference); no
+  coding-agent app has a phone pairing flow to follow.
+- Mascot (components/SheepMascot.tsx, lib/relay/mascot.ts, lib/relay/sheepBadges.ts): the owner's
+  own animated navy sheep (owner-made, 2026-11), eight performances on one 4.8 s loop, drawn as
+  inline SVG and moved each animation frame. The default is the logo's own calm sheep (hello: it
+  tilts and breathes, its eyes stay closed), worn where no state of its own applies: the start (a
+  112 px sheep in a 152 px badge, while the shell loads), the sign-ins (80 px, no badge) and the
+  confirm. lib/relay/sheepBadges.ts maps the other screens to their performance: the comparison
+  (approval), the connection (connecting), the ready PC (done), a failure (refused); on the step
+  frame 56 px in an 80 px badge. Every prop (plug, 123, check, lock, key, Zzz, the captain's hat)
+  is half again the kit's size about its own centre, so it overlaps the wool's edge, and under
+  96 px the props grow up to 1.8 times more with an outline of their own colour; the sheep itself
+  never changes. Reduced motion draws the loop's first
+  frame and leaves it. The engine and its paths are a chunk of their own, fetched when the first
+  sheep shows (about 13 KB gzipped), never in the page's entry.
 - Account part (components/AccountPcs.tsx, RelayDashboard.tsx, RelayOverview.tsx,
   RelayPcTable.tsx, RelayPcDetails.tsx, RelayMap.tsx, AddPcSheet.tsx, EnrollmentStatus.tsx,
   StatusDot.tsx, relayPcState.tsx, lib/account/, lib/relay/dashboard.ts), only on the front page

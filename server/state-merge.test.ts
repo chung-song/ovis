@@ -58,6 +58,26 @@ const writeJson = (path: string, value: unknown, mtime?: Date) => {
 };
 
 describe("paired devices of the install's other state dir", () => {
+  it("flag off: twins keep their local holds and a newly imported held row stays out", () => {
+    const { active, sibling } = install();
+    const twin = device("a");
+    const held = "b".repeat(32);
+    const incoming = { ...device("b"), held };
+    const conflict = device("c");
+    writeDevices(active, [twin, { ...conflict, held }]);
+    writeDevices(sibling, [{ ...twin, held }, incoming, { ...conflict, token_hash: hash("other-c") }]);
+    expect(mergeSiblingState(active, sibling).devicesBlocked).toBeNull();
+    const local = new DeviceStore(active);
+    expect(local.sessionRow(twin.id)?.role).toBe("drive");
+    const other = new DeviceStore(sibling);
+    expect(other.sessionRow(twin.id)).toBeNull();
+    expect(other.match("token-c")).toBeNull();
+    expect(other.match("other-c")?.id).toBe(conflict.id);
+    expect(local.list(null).map(row => row.id)).toContain(incoming.id);
+    expect(local.match("token-b")).toBeNull();
+    expect(registry(active).devices.find(row => row.id === incoming.id)?.held).toBe(held);
+  });
+
   it("are all kept at the first merge, the gate closed from the earliest evidence, both dirs ending alike", () => {
     const { active, sibling } = install();
     writeDevices(active, [device("a", "2026-10-25T05:22:00.000Z")]);
@@ -65,7 +85,11 @@ describe("paired devices of the install's other state dir", () => {
     const before = readFileSync(join(active, "devices.json"), "utf8");
     expect(mergeSiblingState(active, sibling, at(0)).devicesBlocked).toBeNull();
     expect(ids(active)).toEqual(["a", "b"]);
-    expect(registry(active)).toEqual(registry(sibling));
+    // each dir marks the rows it only copied (imported): a dir's own word, the rest alike (P22)
+    const alike = (dir: string) => ({ ...registry(dir), devices: registry(dir).devices.map(({ imported: _copied, ...device }) => device) });
+    expect(alike(active)).toEqual(alike(sibling));
+    expect(registry(active).devices.map((d) => d.imported === true)).toEqual([false, true]);
+    expect(registry(sibling).devices.map((d) => d.imported === true)).toEqual([true, false]);
     expect(registry(active).gate_closed_at).toBe("2026-10-25T05:19:00.000Z");
     // the device paired in the other dir gets in with its own cookie
     expect(new DeviceStore(active).match("token-b")?.id).toBe(device("b").id);

@@ -189,10 +189,15 @@ async function visitLater(page: Page): Promise<void> {
   await load(page, "#my-machines");
 }
 const relayOpens = (width: number): number => pageLog.filter((line) => line.startsWith(`${width} WS open`)).length;
+/**
+ * Signs in on the front page: a device with a saved pairing then opens that machine (a launch); one without goes to the
+ * join card of the account's machine it is not in yet, or to Add a PC (never the dashboard).
+ */
 async function signIn(page: Page): Promise<void> {
   await page.goto(APP);
   await page.locator(".account-provider").first().click();
-  await page.locator('[data-dashboard-mode="account"]').waitFor();
+  // the dashboard only in baseline mode, which runs this against a shell from before the change, which landed there
+  await page.locator(`.app, [data-add-pc-mode], main.relay-add-screen[data-account-state="signed-in"]${baseline === undefined ? "" : ', [data-dashboard-mode="account"]'}`).first().waitFor();
 }
 /** Every string a person can read on the page now: its text and its labels. */
 const rendered = (page: Page): Promise<string> => page.evaluate(() => [document.body.innerText,
@@ -228,9 +233,11 @@ function steps(browser: Browser, width: 390 | 1440): Step[] {
       await page().locator('[data-relay-state="confirm"] .btn-primary').click();
       await page().locator(".app").waitFor();
     } },
-    { name: "signed in: the front page stays the dashboard, with no link to My machines", precondition: true, run: async () => {
+    { name: "signed in: the sign-in's return opens the paired machine, with no link to My machines", precondition: true, run: async () => {
       await signIn(page());
-      assert.equal(await page().locator('a[href*="my-machines"]').count(), 0, "the dashboard links to My machines");
+      await page().locator(".app").waitFor();
+      assert.equal(new URL(page().url()).pathname, `/s/${identity.server_id}/`, "the sign-in's return opened the paired machine");
+      assert.equal(await page().locator('a[href*="my-machines"]').count(), 0, "the machine's page links to My machines");
     } },
     { name: "My machines lists the machine as ready, with its route", precondition: true, run: async () => {
       await visitLater(page());
@@ -326,7 +333,9 @@ function steps(browser: Browser, width: 390 | 1440): Step[] {
       second = await device(browser, width);
       shown = second.page;
       await signIn(second.page);
-      await second.page.evaluate(() => { window.location.hash = "#my-machines"; });
+      // a device the account has not let in yet opens no machine by itself: it lands on its join card or Add a PC
+      assert.equal(await second.page.locator(".app").count(), 0, "the second device opened the machine without a press");
+      await load(second.page, "#my-machines");
       await inState(second.page, "needs-approval").waitFor();
       const text = await row(second.page).innerText();
       assert.match(text, /Needs approval/);

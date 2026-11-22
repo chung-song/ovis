@@ -20,6 +20,9 @@ jobs:
           git -C source fetch --depth 1 https://github.com/chung-song/ovis.git 19f770a7c65e644ce22309d9753c91dc25f3abc9
           git -C source checkout --detach FETCH_HEAD
           test "$(git -C source rev-parse HEAD)" = 19f770a7c65e644ce22309d9753c91dc25f3abc9
+          git -C source remote add origin https://github.com/devswha/ovis.git
+          git -C source fetch --depth 1 origin aa7a2d6d1310a17636ef6abc6dd52936648d38cf
+          git -C source update-ref refs/remotes/origin/main FETCH_HEAD
       - name: Build the repository CI runner image on native Linux x64
         shell: bash
         run: |
@@ -35,7 +38,7 @@ jobs:
           mkdir results
           chmod 777 results
           docker run --rm --platform linux/amd64 --shm-size 2g --entrypoint /bin/bash \
-            -e CI=1 -e RUNNER_ENVIRONMENT=self-hosted \
+            -e CI=1 -e RUNNER_ENVIRONMENT=self-hosted -e RATCHET_BASE=aa7a2d6d1310a17636ef6abc6dd52936648d38cf \
             -v "$PWD/source:/source:ro" -v "$PWD/results:/results" \
             ovis-native-review -lc '
               set -euo pipefail
@@ -64,6 +67,7 @@ jobs:
               run_check sidebar-tokens scripts/sidebar-tokens-demo-regression.ts
               run_check sidebar-spacing scripts/sidebar-spacing-demo-regression.ts
               run_check agent-state-groups scripts/agent-state-groups-demo-regression.ts
+              unset HERDR_DEMO_BUILD CHROME_PATH
               run_check fast-checks run check fast
               exit "$result"
             '

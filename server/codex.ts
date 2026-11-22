@@ -1612,17 +1612,20 @@ function lastFinishedTurn(rollout: string): { asked: string | null; answer: stri
 
 /**
  * A screen's answers, each as it would be compared whole: a line at the start of the screen's line (a "\u2022"
- * or "\u25e6" one, without its bullet) with the indented and blank lines below it, up to the next such line or
- * a "\u2500" rule Codex draws below a finished turn.
+ * or "\u25e6" one, without its bullet, `bulleted`) with the indented and blank lines below it, up to the next such
+ * line or a "\u2500" rule Codex draws below a finished turn.
  */
-function shownBlocks(text: string): string[] {
-  const blocks: string[] = [];
+function shownBlocks(text: string): { text: string; bulleted: boolean }[] {
+  const blocks: { text: string; bulleted: boolean }[] = [];
   let open = false;
   for (const line of text.split("\n")) {
     // Codex indents what an answer wraps onto: a line at the start of the screen's line begins another
     if (/^\u2500/.test(line)) open = false;
-    else if (open && /^(?:\s|$)/.test(line)) blocks[blocks.length - 1] += `\n${line}`;
-    else if (line.trim() !== "") { blocks.push(line.replace(/^[\u2022\u25e6]\s?/, "")); open = true; }
+    else if (open && /^(?:\s|$)/.test(line)) blocks[blocks.length - 1]!.text += `\n${line}`;
+    else if (line.trim() !== "") {
+      blocks.push({ text: line.replace(/^[\u2022\u25e6]\s?/, ""), bulleted: /^[\u2022\u25e6]/.test(line) });
+      open = true;
+    }
   }
   return blocks;
 }
@@ -1712,8 +1715,11 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   const answerParts = partsOf(screen);
   const texts = blocks ? answerParts : [answerParts.join("\n")];
   const displays = texts.map(normalizeDisplay);
-  const renderedBlocks = answerParts.flatMap(shownBlocks);
-  const wholeBlocks = renderedBlocks.map(markedDisplay);
+  const screenBlocks = answerParts.flatMap(shownBlocks);
+  const wholeBlocks = screenBlocks.map((block) => markedDisplay(block.text));
+  // a rendered answer counts from its bullet only: indented rows a read begins with may be the rest of a prompt or of a
+  // tool's output whose first row the read cut. Each block's letters first: rendering an answer parses all its markdown
+  const renderedBlocks = screenBlocks.flatMap((block) => block.bulleted ? [{ text: block.text, letters: normalizeDisplay(block.text) }] : []);
   const parsed = candidates.map(turnsOf);
   const footed = blocks ? null : footedAnswer(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))));
   const turn = footed === null ? null : footedTurnOwner(footed, candidates, displays, footerOwners);
@@ -1737,7 +1743,7 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
           // Commentary may contain Markdown while tools are still running, so no
           // completed-turn footer exists yet. A whole rendered message is the
           // same substantial evidence as a whole plain one, never just a suffix.
-          || renderedBlocks.some((block) => completedAnswerMatches(text, block))
+          || renderedBlocks.some((block) => block.letters.includes(found.anchor) && completedAnswerMatches(text, block.text))
           || (candidate.path === footedOwner && completedAnswerMatches(text, footed!.text))) ? [found] : [];
     });
     if (anchors.length === 0) continue;

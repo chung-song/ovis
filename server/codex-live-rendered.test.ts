@@ -37,6 +37,13 @@ describe("whole rendered assistant messages during a tool run", () => {
     }
   });
 
+  it("takes no message from the rows a read begins with, below a prompt's or a tool output's first row it cut", () => {
+    const rest = ["", "• Ran inspect-application", "  └ Fields checked", "", "› Ask Codex to do anything"];
+    for (const cut of [`  ${drawn.slice(0, 60)}\n  ${drawn.slice(60)}`, `    ${drawn}`]) {
+      expect(matchCodexTranscript([cut, ...rest].join("\n"), [candidate()])).toBeNull();
+    }
+  });
+
   it("refuses two conversations whose messages render identically", () => {
     expect(matchCodexTranscript(screen(), [candidate(), candidate("other", drawn)])).toBeNull();
   });

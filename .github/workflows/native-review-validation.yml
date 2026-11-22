@@ -1,0 +1,69 @@
+name: Native review validation
+on:
+  push:
+    branches:
+      - validation/native-ci-4248
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-linux:
+    if: github.repository == 'chung-song/ovis'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Fetch the unchanged PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init source
+          git -C source fetch --depth 1 https://github.com/chung-song/ovis.git 19f770a7c65e644ce22309d9753c91dc25f3abc9
+          git -C source checkout --detach FETCH_HEAD
+          test "$(git -C source rev-parse HEAD)" = 19f770a7c65e644ce22309d9753c91dc25f3abc9
+      - name: Build the repository CI runner image on native Linux x64
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          sha256sum source/scripts/self-hosted-runner/Dockerfile
+          docker build --platform linux/amd64 -t ovis-native-review source/scripts/self-hosted-runner
+          docker image inspect ovis-native-review --format '{{.Id}} {{.Architecture}} {{.Config.User}}'
+      - name: Validate the unchanged PR in its CI image
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir results
+          chmod 777 results
+          docker run --rm --platform linux/amd64 --shm-size 2g --entrypoint /bin/bash \
+            -e CI=1 -e RUNNER_ENVIRONMENT=self-hosted \
+            -v "$PWD/source:/source:ro" -v "$PWD/results:/results" \
+            ovis-native-review -lc '
+              set -euo pipefail
+              cp -a /source /w/review
+              cd /w/review
+              id
+              uname -m
+              bun --version
+              node --version
+              herdr --version
+              git rev-parse HEAD
+              bun install --frozen-lockfile --network-concurrency=8
+              export CHROME_PATH="$(bash scripts/ci-chromium.sh)"
+              bun scripts/demo-build.ts /w/demo
+              export HERDR_DEMO_BUILD=/w/demo
+              result=0
+              run_check() {
+                local name="$1"
+                shift
+                local status=0
+                bun "$@" 2>&1 | tee "/results/$name.log" || status=$?
+                printf "NATIVE_RESULT %s exit=%s\n" "$name" "$status"
+                if [ "$status" -ne 0 ]; then result=1; fi
+              }
+              run_check IS-076 scripts/ideal-state-behaviour-qa.ts --only IS-076
+              run_check sidebar-tokens scripts/sidebar-tokens-demo-regression.ts
+              run_check sidebar-spacing scripts/sidebar-spacing-demo-regression.ts
+              run_check agent-state-groups scripts/agent-state-groups-demo-regression.ts
+              run_check fast-checks run check fast
+              exit "$result"
+            '

@@ -1172,16 +1172,18 @@ describe("a thread of another folder Codex has loaded, as a resume through the p
     const rollout = otherFolderThread();
     const command = "echo Deploy finished for every region and the canary plus rollback checks passed cleanly";
     foreground = picker;
-    const ran = `• Ran ${command.replace(" plus", "\n  plus")}\n  └ Deploy finished`;
-    for (const [index, said] of [`Ran ${command}`, `**Ran ${command}**`].entries()) {
+    const titles = [`• Ran ${command.replace(" plus", "\n  plus")}`, `• Ran ${command}`];
+    const cases = titles.flatMap((title) => [`Ran ${command}`, `**Ran ${command}**`].map((said) => ({ title, said })));
+    for (const [index, { title, said }] of cases.entries()) {
+      const ran = `${title}\n  └ Deploy finished`;
       const peer = `01a16b22-7e1f-7072-8897-dddddddd000${index}`;
       elsewhereThread(peer, [said]);
       const both = await loaded(other, peer);
       screen = `  >_ OpenAI Codex (v0.164.0)\n\n${ran}\n\n› `;
-      expect({ said, found: await resolve() }).toEqual({ said, found: null });
+      expect({ title, said, found: await resolve() }).toEqual({ title, said, found: null });
       // the pane's own answer beside that call still tells
       screen = `  >_ OpenAI Codex (v0.164.0)\n\n• ${otherAnswer}\n\n${ran}\n\n› `;
-      expect({ said, found: await resolve() }).toEqual({ said, found: rollout });
+      expect({ title, said, found: await resolve() }).toEqual({ title, said, found: rollout });
       both.kill();
       await both.exited;
     }

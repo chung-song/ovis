@@ -32,7 +32,7 @@ describe("whole rendered assistant messages during a tool run", () => {
   });
 
   it("refuses a partial message or changed punctuation", () => {
-    for (const changed of [drawn.slice(10), drawn + " extra", drawn.replace("직무입니다.", "직무입니다!")]) {
+    for (const changed of [drawn.slice(10), drawn.slice(0, -12), drawn + " extra", drawn.replace("직무입니다.", "직무입니다!")]) {
       expect(matchCodexTranscript(screen(changed), [candidate()])).toBeNull();
     }
   });

@@ -419,7 +419,7 @@ export function ChatTimeline<Row extends ChatTimelineRow>(given: ChatTimelinePro
     ListHeaderComponent={<div className="chat-virtual-header">{header}</div>}
     ListFooterComponent={<div ref={footerRef} className="chat-virtual-footer">{footer}</div>}
     onScroll={() => heard()}
-    onLoad={() => { if (following.current) listRef.current?.scrollToEnd({ animated: false }); }}
+    onLoad={() => { if (following.current) listRef.current?.scrollToEnd({ animated: false, layoutScroll: true }); }}
     onItemSizeChanged={() => {
       if (selecting.current) keepMeasured();
       else if (following.current && !manualLayout.current) followMeasured("measure");

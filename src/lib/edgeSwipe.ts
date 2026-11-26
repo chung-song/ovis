@@ -97,13 +97,27 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   let done = false;
   let state = false;
   let follow: { drawer: HTMLElement; scrim: HTMLElement | null; width: number; shown: number; x: number; at: number; speed: number } | null = null;
+  let touchOrigin: EventTarget | undefined;
+  // Touch events keep their original target even when a streaming render removes it.
+  const moveAtOrigin: EventListener = (event) => {
+    if (!event.composedPath().includes(document)) onMove(event as TouchEvent);
+  };
+  const endAtOrigin: EventListener = (event) => {
+    if (!event.composedPath().includes(document)) onEnd(event as TouchEvent);
+  };
+  const clearTouchOrigin = (): void => {
+    touchOrigin?.removeEventListener?.("touchmove", moveAtOrigin, { capture: true });
+    touchOrigin?.removeEventListener?.("touchend", endAtOrigin, { capture: true });
+    touchOrigin?.removeEventListener?.("touchcancel", endAtOrigin, { capture: true });
+    touchOrigin = undefined;
+  };
   let restoreScroll: (() => void) | null = null;
   const unlockScroll = (): void => {
     const restore = restoreScroll;
     restoreScroll = null;
     restore?.();
   };
-  const lockScroll = (origins: ReturnType<typeof scrollOrigins>, target: EventTarget | undefined): void => {
+  const lockScroll = (origins: ReturnType<typeof scrollOrigins>): void => {
     const saved: { style: CSSStyleDeclaration; property: string; value: string; priority: string }[] = [];
     for (const { node, x, y } of origins) {
       const style = node.style;
@@ -114,20 +128,16 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     }
     // Capture every original axis before changing a shorthand, and register restoration before
     // the first write so a partially applied lock that throws cannot leave a scroller locked.
-    const endAtOrigin: EventListener = (event) => { onEnd(event as TouchEvent); };
     restoreScroll = () => {
-      target?.removeEventListener?.("touchend", endAtOrigin, { capture: true });
-      target?.removeEventListener?.("touchcancel", endAtOrigin, { capture: true });
       for (const { style, property, value, priority } of saved) {
         if (value) style.setProperty(property, value, priority);
         else style.removeProperty(property);
       }
     };
-    target?.addEventListener?.("touchend", endAtOrigin, { capture: true, passive: true });
-    target?.addEventListener?.("touchcancel", endAtOrigin, { capture: true, passive: true });
     for (const { style, property } of saved) style.setProperty(property, "hidden", "important");
   };
   const onStart = (event: TouchEvent): void => {
+    clearTouchOrigin();
     unlockScroll();
     const touch = event.touches[0];
     // the last stroke still holds the drawer: a second finger, or its end never came (the element
@@ -143,6 +153,10 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     done = false;
     state = open;
     follow = null;
+    touchOrigin = start?.path[0];
+    touchOrigin?.addEventListener?.("touchmove", moveAtOrigin, { capture: true, passive: false });
+    touchOrigin?.addEventListener?.("touchend", endAtOrigin, { capture: true, passive: true });
+    touchOrigin?.addEventListener?.("touchcancel", endAtOrigin, { capture: true, passive: true });
   };
   const pageScrolled = (): boolean => {
     const stroke = start;
@@ -180,7 +194,8 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
       // one that never was waits for a direction. Until the drawer moves, a stroke that turns to
       // scrolling goes back to the page, so the terminal's one-finger scroll is not held up
       if (!claimed && verdict === "pending") return;
-      if (verdict === "ignore") { onEnd(); return; }
+      // A long press can open a sheet while the stroke is still waiting for the drawer to move.
+      if (verdict === "ignore" || (!done && document.querySelector(MODAL) !== null)) { onEnd(); return; }
       claimed = true;
       // a recognised swipe belongs to the drawer, not to the terminal or list under the finger
       // After an uncancelled first move Chromium may send non-cancelable moves even on a
@@ -195,7 +210,7 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
           // instant layout writes can still follow streaming text through overflow:hidden.
           const target = start.path.find((node) => (node as Node).isConnected !== false) ?? null;
           start.scrolls = scrollOrigins(target);
-          lockScroll(start.scrolls, start.path[0]);
+          lockScroll(start.scrolls);
           claimTouchStroke(start.path);
         }
         state = verdict === "open";
@@ -232,6 +247,7 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   };
   /** Ends the stroke; returns what the drawer is set to now. */
   const onEnd = (event?: TouchEvent, forcedState?: boolean): boolean => {
+    clearTouchOrigin();
     const held = follow;
     try {
       if (forcedState === undefined && pageScrolled()) forcedState = false;
@@ -292,6 +308,7 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   document.addEventListener("touchend", onEnd, { capture: true, passive: true });
   document.addEventListener("touchcancel", onEnd, { capture: true, passive: true });
   return () => {
+    clearTouchOrigin();
     unlockScroll();
     window.removeEventListener?.("blur", onBackground);
     window.removeEventListener?.("pagehide", onBackground);

@@ -247,6 +247,33 @@ describe("watchDrawerSwipe", () => {
     return target;
   };
 
+  test.each(["touchend", "touchcancel"])("a replaced transcript row carries the pending stroke through %s", (ending) => {
+    const host = scrollTarget();
+    const row = Object.assign(new EventTarget(), { isConnected: true, parentElement: host });
+    const calls: boolean[] = [];
+    const stop = watchDrawerSwipe(() => false, (next) => calls.push(next));
+    const move = (x: number) => Object.assign(new Event("touchmove", { cancelable: true }), {
+      touches: [{ clientX: x, clientY: 300 }],
+    });
+    try {
+      listeners.get("touchstart")?.({ ...move(200), target: row, composedPath: () => [row, host] });
+      const pending = move(230);
+      listeners.get("touchmove")?.(pending);
+      expect(pending.defaultPrevented).toBe(false);
+      row.isConnected = false;
+      row.dispatchEvent(move(270));
+      expect(calls).toEqual([true]);
+      expect(host.style.getPropertyValue("overflow-y")).toBe("hidden");
+      row.dispatchEvent(new Event(ending));
+      expect(host.style.getPropertyValue("overflow-y")).toBe("");
+      const afterLift = move(280);
+      row.dispatchEvent(afterLift);
+      expect(afterLift.defaultPrevented).toBe(false);
+    } finally {
+      stop();
+    }
+  });
+
   test("only the committed interior opening locks scroll axes, then restores inline values and priorities", () => {
     for (const ending of ["touchend", "touchcancel", "second-finger", "wide", "cleanup", "set-open-throws", "partial-lock-throws", "hidden", "pagehide", "blur", "detached"] as const) {
       narrow.matches = true;
@@ -289,7 +316,7 @@ describe("watchDrawerSwipe", () => {
         else if (ending === "pagehide" || ending === "blur") listeners.get(`window:${ending}`)!({});
         else if (ending === "detached") {
           Object.assign(target, { isConnected: false });
-          originListeners.get("touchend")!({ timeStamp: 400 } as Event);
+          originListeners.get("touchend")?.(new Event("touchend"));
           expect(originListeners.size).toBe(0);
         }
         else if (ending === "cleanup") stop();
@@ -502,6 +529,12 @@ describe("watchDrawerSwipe", () => {
   test("a swipe over a dialog, the palette or a sheet leaves the drawer under it alone", () => {
     modal = {};
     expect(stroke([[4, 400], [24, 400], [90, 400]])).toEqual({ reached: 2, calls: [] });
+  });
+
+  test("a sheet opened after touchdown keeps a pending stroke from opening the drawer", () => {
+    const target = scrollTarget();
+    expect(stroke([[200, 400], [230, 400], [280, 400]], false, target,
+      () => { modal = {}; })).toEqual({ reached: 2, calls: [] });
   });
 
   test("a swipe on a code block scrolled sideways scrolls it back instead", () => {

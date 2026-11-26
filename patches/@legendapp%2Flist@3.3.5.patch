@@ -1,10 +1,37 @@
 diff --git a/react.d.ts b/react.d.ts
+index b6c7481603f4119495551b3e4c1c071984c144af..7fba09c4ba014c5fb43884bff1029fad3c244d03 100644
 --- a/react.d.ts
 +++ b/react.d.ts
 @@ -35,1 +35,1 @@
 -type LegendListListenerType = Extract<ListenerType, "activeStickyIndex" | "anchoredEndSpaceSize" | "footerSize" | "headerSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | "lastItemKeys" | "lastPositionUpdate" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "snapToOffsets" | "totalSize">;
 +type LegendListListenerType = Extract<ListenerType, "activeStickyIndex" | "anchoredEndSpaceSize" | "footerSize" | "headerSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | "lastItemKeys" | "lastPositionUpdate" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "scrollAdjust" | "snapToOffsets" | "totalSize">;
+@@ -475,6 +475,8 @@ interface AnchoredEndSpaceReadyInfo {
+ }
+ interface ScrollToEndOptions {
+     animated?: boolean;
++    /** Synchronous layout notification for an automatic, non-animated scroll. */
++    layoutScroll?: boolean;
+     viewOffset?: number;
+ }
+ interface AnchoredEndSpaceConfig {
+@@ -649,6 +651,7 @@ type LegendListRef$1 = {
+      */
+     scrollToIndex(params: {
+         animated?: boolean | undefined;
++        layoutScroll?: boolean | undefined;
+         index: number;
+         viewOffset?: number | undefined;
+         viewPosition?: number | undefined;
+@@ -676,6 +679,7 @@ type LegendListRef$1 = {
+     scrollToOffset(params: {
+         offset: number;
+         animated?: boolean | undefined;
++        layoutScroll?: boolean | undefined;
+     }): Promise<void>;
+     /**
+      * Sets a measured item size and recalculates list positions as needed.
 diff --git a/react.mjs b/react.mjs
+index 95465f2ab89ce41a10553f58af83618f7310e83c..ecf2fc06afbcf5134886e4e629c680cbaabe2e2b 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -1251,7 +1251,38 @@ function calculateOffsetWithOffsetPosition(ctx, offsetParam, params) {
@@ -57,7 +84,82 @@ diff --git a/react.mjs b/react.mjs
      clampedOffset = Math.min(offset, maxOffset);
    }
    clampedOffset = Math.max(0, clampedOffset);
-@@ -4783,10 +4816,35 @@ function updateItemSizes(ctx, measurement) {
+@@ -1313,7 +1346,7 @@ var SCROLL_END_TARGET_EPSILON = 1;
+ function doScrollTo(ctx, params) {
+   var _a3, _b;
+   const state = ctx.state;
+-  const { animated, horizontal, offset } = params;
++  const { animated, horizontal, layoutScroll, offset } = params;
+   state.scheduledWork.cancel("platformScrollCompletion");
+   const scroller = state.refScroller.current;
+   const node = scroller == null ? void 0 : scroller.getScrollableNode();
+@@ -1325,7 +1358,7 @@ function doScrollTo(ctx, params) {
+   const contentSize = isHorizontal ? getContentSize(ctx) : void 0;
+   const left = isHorizontal ? toNativeHorizontalOffset(state, offset, contentSize) : 0;
+   const top = isHorizontal ? 0 : offset;
+-  scroller.scrollTo({ animated: isAnimated, x: left, y: top });
++  scroller.scrollTo({ animated: isAnimated, layoutScroll, x: left, y: top });
+   if (isAnimated) {
+     const target = (_b = (_a3 = scroller.getScrollEventTarget) == null ? void 0 : _a3.call(scroller)) != null ? _b : null;
+     listenForScrollEnd(ctx, {
+@@ -1442,12 +1475,14 @@ function doMaintainScrollAtEnd(ctx) {
+             const nativeOffset = toNativeHorizontalOffset(state, logicalEndOffset, currentContentSize);
+             scroller == null ? void 0 : scroller.scrollTo({
+               animated: maintainScrollAtEnd.animated,
++              layoutScroll: true,
+               x: nativeOffset,
+               y: 0
+             });
+           } else {
+             scroller == null ? void 0 : scroller.scrollToEnd({
+-              animated: maintainScrollAtEnd.animated
++              animated: maintainScrollAtEnd.animated,
++              layoutScroll: true
+             });
+           }
+           setTimeout(
+@@ -2054,6 +2089,7 @@ function scrollTo(ctx, params) {
+   const {
+     animated,
+     isInitialScroll,
++    layoutScroll = isInitialScroll,
+     offset: scrollTargetOffset,
+     precomputedWithViewOffset,
+     waitForInitialScrollCompletionFrame
+@@ -2094,7 +2130,7 @@ function scrollTo(ctx, params) {
+     }
+   }
+   if (forceScroll || !isInitialScroll || Platform.OS === "android") {
+-    doScrollTo(ctx, { animated, horizontal, offset });
++    doScrollTo(ctx, { animated, horizontal, layoutScroll, offset });
+   } else {
+     state.scroll = offset;
+   }
+@@ -2119,6 +2155,7 @@ function scrollToIndex(ctx, {
+   animated = true,
+   forceScroll,
+   isInitialScroll,
++  layoutScroll,
+   viewPosition
+ }) {
+   const state = ctx.state;
+@@ -2137,6 +2174,7 @@ function scrollToIndex(ctx, {
+     index,
+     isInitialScroll,
+     itemSize,
++    layoutScroll,
+     offset: firstIndexOffset,
+     viewOffset,
+     viewPosition: viewPosition != null ? viewPosition : 0
+@@ -2998,6 +3036,7 @@ function scrollToFallbackOffset(ctx, offset) {
+   var _a3;
+   (_a3 = ctx.state.refScroller.current) == null ? void 0 : _a3.scrollTo({
+     animated: false,
++    layoutScroll: true,
+     x: ctx.state.props.horizontal ? offset : 0,
+     y: ctx.state.props.horizontal ? 0 : offset
+   });
+@@ -4783,10 +4822,35 @@ function updateItemSizes(ctx, measurement) {
      updateItemSizesBatch(ctx, [measurement]);
    }
  }
@@ -93,7 +195,7 @@ diff --git a/react.mjs b/react.mjs
    for (const measurement of measurements) {
      const ownsMeasuredItem = measurement.containerId === void 0 || peek$(ctx, `containerItemKey${measurement.containerId}`) === measurement.itemKey;
      if (ownsMeasuredItem) {
-@@ -5668,7 +5726,10 @@ function sortDOMElements(container, indexByElement) {
+@@ -5668,7 +5732,10 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -105,7 +207,7 @@ diff --git a/react.mjs b/react.mjs
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
-@@ -5715,35 +5776,22 @@ function findLIS(arr) {
+@@ -5715,35 +5782,22 @@ function findLIS(arr) {
  // src/hooks/useDOMOrder.ts
  function useDOMOrder(ref) {
    const ctx = useStateContext();
@@ -155,26 +257,53 @@ diff --git a/react.mjs b/react.mjs
  }
  function useFreshDataTransitionVisibility(readyToRender, transitionEpoch) {
    const [completedTransitionEpoch, setCompletedTransitionEpoch] = useState(transitionEpoch);
-@@ -6100,7 +6148,8 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+@@ -6074,7 +6128,7 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+     return horizontal ? scrollElement.scrollLeft : scrollElement.scrollTop;
+   }, [getMaxScrollOffset, horizontal, isWindowScroll]);
+   const scrollToLocalOffset = useCallback(
+-    (offset, animated) => {
++    (offset, animated, layoutScroll) => {
+       const scrollElement = scrollRef.current;
+       const target = getScrollTarget();
+       if (!target || typeof target.scrollTo !== "function") {
+@@ -6100,7 +6154,8 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
        } else {
          options.top = clampedOffset;
        }
 -      target.scrollTo(options);
-+      if (animated) target.scrollTo(options);
-+      else layoutScrollWrite(target, () => target.scrollTo(options));
++      if (layoutScroll && !animated) layoutScrollWrite(target, () => target.scrollTo(options));
++      else target.scrollTo(options);
      },
      [getMaxScrollOffset, getScrollTarget, horizontal, isWindowScroll]
    );
-@@ -6120,7 +6169,7 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
-         if (!target || typeof target.scrollBy !== "function") {
-           return;
-         }
--        target.scrollBy({ behavior: "auto", left: x, top: y });
-+        layoutScrollWrite(target, () => target.scrollBy({ behavior: "auto", left: x, top: y }));
+@@ -6123,13 +6178,13 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+         target.scrollBy({ behavior: "auto", left: x, top: y });
        },
        scrollTo: (options) => {
-         const { x = 0, y = 0, animated = true } = options;
-@@ -6384,7 +6433,7 @@ function getScrollAdjustTarget(ctx, contentNode) {
+-        const { x = 0, y = 0, animated = true } = options;
+-        scrollToLocalOffset(horizontal ? x : y, animated);
++        const { x = 0, y = 0, animated = true, layoutScroll } = options;
++        scrollToLocalOffset(horizontal ? x : y, animated, layoutScroll);
+       },
+       scrollToEnd: (options = {}) => {
+-        const { animated = true } = options;
++        const { animated = true, layoutScroll } = options;
+         const endOffset = getMaxScrollOffset();
+-        scrollToLocalOffset(endOffset, animated);
++        scrollToLocalOffset(endOffset, animated, layoutScroll);
+       },
+       scrollToOffset: (params) => {
+         const { offset, animated = true } = params;
+@@ -6219,7 +6274,7 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+   useEffect(() => {
+     const doScroll = () => {
+       if (contentOffset) {
+-        scrollToLocalOffset(horizontal ? contentOffset.x || 0 : contentOffset.y || 0, false);
++        scrollToLocalOffset(horizontal ? contentOffset.x || 0 : contentOffset.y || 0, false, true);
+       }
+     };
+     doScroll();
+@@ -6384,7 +6439,7 @@ function getScrollAdjustTarget(ctx, contentNode) {
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
  function scrollAdjustBy(el, left, top) {
@@ -183,7 +312,7 @@ diff --git a/react.mjs b/react.mjs
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6425,8 +6474,11 @@ function ScrollAdjust() {
+@@ -6425,8 +6480,11 @@ function ScrollAdjust() {
                window.getComputedStyle(contentNode)[axis.paddingEndProp]
              );
              const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
@@ -196,7 +325,7 @@ diff --git a/react.mjs b/react.mjs
              void contentNode.offsetHeight;
              scrollBy();
              if (resetPaddingRafRef.current !== void 0) {
-@@ -7194,10 +7246,12 @@ function scrollToEnd(ctx, options) {
+@@ -7194,10 +7252,12 @@ function scrollToEnd(ctx, options) {
    }
    const paddingBottom = state.props.stylePaddingBottom || 0;
    const footerSize = peek$(ctx, "footerSize") || 0;
@@ -210,7 +339,7 @@ diff --git a/react.mjs b/react.mjs
      viewPosition: 1
    });
    return true;
-@@ -7286,6 +7340,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7286,6 +7346,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -218,7 +347,7 @@ diff --git a/react.mjs b/react.mjs
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7436,15 +7491,24 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7436,15 +7497,24 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
          params.index >= 0 ? () => isScrollToIndexReady(params.index) : void 0
        );
      },

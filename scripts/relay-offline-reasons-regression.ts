@@ -220,9 +220,10 @@ async function walkOne(browser: Browser, site: PagesSite, run: Run, arriveHere: 
     if (relayReachable) { relayBrowserSocket(ws, () => relayUrl(ws.url())); return; }
     ws.close({ code: 1011, reason: "out of reach" });
   });
-  await context.addInitScript(({ language, theme }) => {
-    if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language, theme }));
-  }, { language: run.language, theme: run.theme });
+  await context.addInitScript(({ app, language, theme }) => {
+    // about:blank, which each load of the front page passes through (toFront), has no storage to read
+    if (location.origin === app && localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language, theme }));
+  }, { app: APP, language: run.language, theme: run.theme });
   const page = await context.newPage();
   await page.clock.setFixedTime(PAGE_NOW);
   page.setDefaultTimeout(20_000);
@@ -242,13 +243,16 @@ async function walkOne(browser: Browser, site: PagesSite, run: Run, arriveHere: 
   /**
    * A fresh load of the front page, which reads the saved pairings again and checks each PC as it loads: once `entry`'s
    * check opened its socket. Always a navigation of its own, never a script in the page: a sign-in's return may still be
-   * loading it, and goto wins over that. The tab's launch is past, so the front page stays Add a PC. The front page
+   * loading it, and goto wins over that. The tab's launch is past, so the front page stays My PCs. The front page
    * checks its PCs at most once a minute (pcSweep.ts CHECK_GAP_MS), so each load is a minute after the one before on
-   * the page's standing clock.
+   * the page's standing clock. That minute is stamped in localStorage by whichever page of the tab checks first, so the
+   * page before is unloaded before the clock moves: a late redraw of it, once it reads the seeded pairings, would otherwise
+   * check at the new minute, take it from this load, and go away before its socket opened.
    */
   let pageNow = PAGE_NOW;
   const toFront = async (entry: Entry): Promise<void> => {
     pageNow += CHECK_GAP_MS;
+    await page.goto("about:blank");
     await page.clock.setFixedTime(pageNow);
     const checked = nextSocket(entry.server_id);
     await page.goto(`${APP}/`);
@@ -268,12 +272,12 @@ async function walkOne(browser: Browser, site: PagesSite, run: Run, arriveHere: 
   doing = "precondition: sign in";
   await page.goto(`${APP}/`);
   await page.locator(".account-provider").first().click({ timeout: LOAD_MS });
-  // a sign-in lands on the connect tabs, or on the join an account PC its launch picked asks by itself (#16)
-  await page.locator('main.relay-add-screen[data-account-state="signed-in"] .connect-start-tabs, [data-add-pc-mode], [data-approval-wait]').first().waitFor({ timeout: LOAD_MS });
-  // the person goes to the front page (as Cancel or Back would): it stays the connect tabs, launching nothing (#16)
+  // a sign-in lands on My PCs, or on the join an account PC its launch picked asks by itself (#16)
+  await page.locator('main.relay-add-screen[data-account-state="signed-in"] [data-view="my-pcs"], [data-add-pc-mode], [data-approval-wait]').first().waitFor({ timeout: LOAD_MS });
+  // the person goes to the front page (as Cancel or Back would): it stays My PCs, launching nothing (#16)
   await page.evaluate(() => sessionStorage.setItem("ovis-front-chosen", "1"));
   await page.goto(`${APP}/`);
-  await page.locator('main.relay-add-screen[data-account-state="signed-in"] .connect-start-tabs').waitFor({ timeout: LOAD_MS });
+  await page.locator('main.relay-add-screen[data-account-state="signed-in"] [data-view="my-pcs"]').waitFor({ timeout: LOAD_MS });
   await seed(page);
   await step("precondition: both rows", () => toFront(a));
   arriveHere();
@@ -312,14 +316,14 @@ async function walkOne(browser: Browser, site: PagesSite, run: Run, arriveHere: 
   doing = "asserting";
   await shot("back-reached");
 
-  assert.equal(offlineNote, off, `${tag}: stopped pc-a's row on Add a PC is noted Off`);
+  assert.equal(offlineNote, off, `${tag}: stopped pc-a's row on My PCs is noted Off`);
   assert.deepEqual(offlineOpen, { title: t("Machine offline"), retry: 1 }, `${tag}: Open anyway ends on Machine offline with Try again`);
   assert.deepEqual(unreachableOpen, { title: t("Could not reach this machine"), retry: 1 }, `${tag}: with the relay out of reach, Open ends on Could not reach this machine with Try again`);
   assert.ok(reached !== "pc-offline", `${tag}: once the relay is back, Try again reaches m1-box (${reached})`);
   assert.ok(offlineScroll <= 0 && unreachableScroll <= 0, `${tag}: the front page does not scroll sideways (${offlineScroll}, ${unreachableScroll} px)`);
   assert.deepEqual(errors, [], `${tag}: no page error`);
   await closeMarked(context);
-  return `PASS ${tag}: stopped pc-a is noted Off on Add a PC and Open ends on Machine offline with Try again; with the relay out of reach Open on m1-box ends on Could not reach this machine, and Try again reaches it once the relay is back (${reached})`;
+  return `PASS ${tag}: stopped pc-a is noted Off on My PCs and Open ends on Machine offline with Try again; with the relay out of reach Open on m1-box ends on Could not reach this machine, and Try again reaches it once the relay is back (${reached})`;
   }
 }
 

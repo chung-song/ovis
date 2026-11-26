@@ -1,11 +1,12 @@
 import { createShellTestPage } from "./shell.test.tsx";
 import { afterEach, beforeEach, describe, expect, it, jest, spyOn } from "bun:test";
-import { createElement, type ReactElement } from "react";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { act, createElement, type ReactElement } from "react";
+import { openPage, type Page } from "../page.fixture.ts";
 
 import { exportPublicKey, generateKeyPair } from "../../../shared/relay-e2ee.ts";
 import { deriveServerId } from "../../../shared/relay-server-proof.ts";
 import { RelayShell, type RelayShellProps } from "../../components/RelayShell.tsx";
+import { keepKnownPcs } from "../account/knownPcs.ts";
 import { indexedAccountStore, memoryAccountStore } from "../account/store.ts";
 import { useHostedSignIn, type HostedSignIn } from "../account/hostedSignIn.ts";
 import type { BlockRecord } from "../../../shared/account-records.ts";
@@ -27,8 +28,17 @@ const drain = async (): Promise<void> => { for (let turn = 0; turn < 500; turn++
 describe("the hosted shell's front page", () => {
   let browser: ReturnType<typeof createShellTestPage>;
   let rendered: ReactElement[];
+  let signOutPage: Page | undefined;
   beforeEach(() => { browser = createShellTestPage(); rendered = []; });
-  afterEach(() => { jest.useRealTimers(); browser.dispose(); });
+  afterEach(async () => {
+    jest.useRealTimers();
+    if (signOutPage) {
+      await signOutPage.close();
+      signOutPage = undefined;
+      jest.restoreAllMocks();
+    }
+    browser.dispose();
+  });
 
   const deviceStore = (devices: RelayDevice[]): ShellDeviceStore => ({
     async get(serverId) { return devices.find((device) => device.server_id === serverId); },
@@ -251,6 +261,45 @@ describe("the hosted shell's front page", () => {
     await until(() => reads === 15 && rendered.length > shown, "the read on coming back drawn");
     expect(account().error).toBeNull();
     expect(rows()).toBe(3);
+  });
+
+  it("keeps the account's PCs it listed last for a page loaded with no internet, and forgets them once signed out", async () => {
+    const pair = generateKeyPair();
+    const mac = { server_id: deriveServerId(pair.publicKey), label: "hasang-uui-MacBookPro", added_at: new Date(Date.now() - 86_400_000).toISOString(), last_seen_at: new Date(Date.now() - 20 * 3_600_000).toISOString(), public_key: Buffer.from(pair.publicKey).toString("hex"), relay: AP };
+    let online = true;
+    const accountFetch = async (input: RequestInfo | URL): Promise<Response> => {
+      if (new URL(String(input)).pathname !== "/v1/pcs") return new Response(null, { status: 404 });
+      if (!online) throw new TypeError("Failed to fetch");
+      return ({ status: 200, ok: true, json: async () => ({ pcs: [mac] }) }) as unknown as Response;
+    };
+    const accountStore = memoryAccountStore();
+    const session = { service: SERVICE, account: "acct-test", provider: "github" as const, access_token: "access", refresh_token: "refresh", expires_at: Date.now() + 3_600_000 };
+    await accountStore.set("session", session);
+    await mountRelayShell(mountFor({ accountService: SERVICE, accountProviders: ["github"], accountStore, accountFetch, store: deviceStore([]) }));
+    await until(() => rendered.length > 0 && account().pcs !== null, "the first read drawn");
+    expect(account().pcs!.map((pc) => pc.name)).toEqual(["hasang-uui-MacBookPro"]);
+
+    // the app opened again with no internet: a new page, whose read gets no answer at all
+    online = false;
+    rendered = [];
+    await mountRelayShell(mountFor({ accountService: SERVICE, accountProviders: ["github"], accountStore, accountFetch, store: deviceStore([]) }));
+    await until(() => rendered.length > 0 && account().error !== null, "the failed read drawn");
+    expect(account().pcs).toEqual([]);
+    expect(account().known).toEqual([{ server_id: mac.server_id, name: "hasang-uui-MacBookPro" }]);
+    // another tab's read found none to keep since: this page's next failed read lists none either, not the earlier ones
+    keepKnownPcs("acct-test", []);
+    const drawn = rendered.length;
+    visible("visible");
+    await until(() => rendered.length > drawn && account().error !== null, "the next failed read on this page drawn");
+    expect(account().known).toBeUndefined();
+
+    shellAccountActions()?.signOut();
+    await drain();
+    rendered = [];
+    await accountStore.set("session", session);
+    await mountRelayShell(mountFor({ accountService: SERVICE, accountProviders: ["github"], accountStore, accountFetch, store: deviceStore([]) }));
+    await until(() => rendered.length > 0 && account().error !== null, "the next failed read drawn");
+    expect(account().known ?? []).toEqual([]);
   });
 
   it("reads nothing again while the first read is still out, so an older answer never lands over a newer one", async () => {
@@ -500,23 +549,14 @@ describe("the hosted shell's front page", () => {
     await until(() => rendered.length > 0 && account().pcs !== null, "the signed-in front page");
     let hosted: HostedSignIn | null = null;
     const Probe = (): null => { hosted = useHostedSignIn(); return null; };
-    const react = Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT");
-    Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
-    let page: ReactTestRenderer | null = null;
-    try {
-      await act(async () => { page = create(createElement(Probe)); });
-      expect(hosted).toMatchObject({ provider: "github" });
-      await act(async () => { hosted!.signOut(); await signedOut.promise; });
-      await drain();
-      expect(await accountStore.get("session")).toBeUndefined();
-      expect(Object.keys(await accountStore.get("unsent_blocks") ?? {})).toEqual(["r1"]);
-      expect(last().state).toMatchObject({ account: { kind: "signed-out" } });
-    } finally {
-      await act(async () => { page?.unmount(); });
-      if (react) Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", react);
-      else Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
-      jest.restoreAllMocks();
-    }
+    signOutPage = openPage("https://app.ovis.sh/");
+    await signOutPage.render(createElement(Probe));
+    expect(hosted).toMatchObject({ provider: "github" });
+    await act(async () => { hosted!.signOut(); await signedOut.promise; });
+    await drain();
+    expect(await accountStore.get("session")).toBeUndefined();
+    expect(Object.keys(await accountStore.get("unsent_blocks") ?? {})).toEqual(["r1"]);
+    expect(last().state).toMatchObject({ account: { kind: "signed-out" } });
   });
 
 });

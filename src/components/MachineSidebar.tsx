@@ -39,6 +39,7 @@ import { serverIdOfPath, shellMode } from "../lib/shellMode.ts";
 import { canHideMachine, HIDDEN_MACHINES_MAX, setHiddenMachines, useHiddenMachines, withMachineHidden } from "../lib/hiddenMachines.ts";
 import { ExternalLink } from "../lib/externalLink.ts";
 import { MachineOffLine, useRecheck } from "./MachineOffLine.tsx";
+import { ProgressLine } from "./ProgressBar.tsx";
 import { outOfReachReason } from "./relayPcState.tsx";
 
 export const DRAWER_QUERY = "(max-width: 768px)";
@@ -52,8 +53,8 @@ export function pcListExit(page: { nativeApp: boolean; relayShell: boolean; path
 }
 
 /**
- * Where a phone's More → Add a PC leads (relay step 1): a PC page of the hosted app, in a browser or inside the phone
- * app (which opens it there), goes to the hosted app's Add a PC ("shell"); a PC the phone app opened by its address
+ * Where a phone's More → Connect a PC leads (relay step 1): a PC page of the hosted app, in a browser or inside the phone
+ * app (which opens it there), goes to the hosted app's My PCs ("shell"); a PC the phone app opened by its address
  * goes back to the app's own screens ("app"); anywhere else there is none. Unlike pcListExit, the phone app does not
  * come first: a hosted PC page inside it adds a PC on the hosted side, where its pairings are.
  */
@@ -61,7 +62,7 @@ export function addPcExit(page: { nativeApp: boolean; relayShell: boolean; pathn
   return pcListExit({ ...page, nativeApp: false }) ?? (page.nativeApp ? "app" : null);
 }
 
-/** The hosted app's Add a PC, opened from a PC's More: its Back comes back here (RelayShell's `addEntry`). */
+/** The hosted app's My PCs, opened from a PC's More: its Back comes back here (RelayShell's `addEntry`). */
 export const ADD_PC_FROM_KEY = "ovis-add-pc-from";
 
 /**
@@ -73,7 +74,7 @@ export function addPcMoreItem(exit: "app" | "shell" | null, sheetWidth: boolean)
 }
 
 /**
- * Opens Add a PC where `exit` (addPcExit) leads: the phone app's connect tabs keep this PC open until another is picked;
+ * Opens Connect a PC where `exit` (addPcExit) leads: the phone app's connect tabs keep this PC open until another is picked;
  * the hosted app's loads once More's step off its entry has landed, which would otherwise cancel it or bring this page back.
  */
 export async function openAddPc(exit: "app" | "shell"): Promise<void> {
@@ -421,7 +422,7 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }
   // a PC of the relay (one of the account's) says where it is by the dot beside its name alone, its words a tooltip:
   // the server keeps trying it, so there is nothing to read or press under it
   const quiet = machine.kind === "relay" && !noticed;
-  const dotWords = away === "off" ? t("Switched off") : away !== null ? awayReason ?? machineErrorText(machine.error!, t) : t(STATE_WORD[machine.state]);
+  const dotWords = away === "off" ? t("Can't reach the PC: it may be off") : away !== null ? awayReason ?? machineErrorText(machine.error!, t) : t(STATE_WORD[machine.state]);
   const closeMenu = useCallback(() => setMenu(null), []);
   const endRename = (save: boolean) => {
     setRenaming(false);
@@ -526,13 +527,7 @@ export function BridgeUpdateProgress({ update }: { update: MachineUpdate }) {
   const view = describeProgress(update.progress);
   const seconds = useStageSeconds(update);
   if (!view) return <p className="bridge-progress-step">{update.step}</p>;
-  return <div className="bridge-progress">
-    <p className="bridge-progress-step"><span>{view.label}</span><span className="bridge-progress-count">{view.step}</span></p>
-    <div className="bridge-progress-bar" role="progressbar" aria-label={view.label} aria-valuemin={0} aria-valuemax={100} {...(view.percent === null ? {} : { "aria-valuenow": view.percent })}>
-      <span className={view.percent === null ? "is-indeterminate" : ""} style={view.percent === null ? undefined : { width: `${view.percent}%` }} />
-    </div>
-    <p className="bridge-progress-detail">{view.detail ?? `${seconds} s`}</p>
-  </div>;
+  return <ProgressLine label={view.label} count={view.step} percent={view.percent}><p className="bridge-progress-detail">{view.detail ?? `${seconds} s`}</p></ProgressLine>;
 }
 
 function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(machine: Machine, update?: boolean): void }) {

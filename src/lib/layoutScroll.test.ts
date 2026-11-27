@@ -18,7 +18,7 @@ test("layout notifications surround the actual write and finish after an excepti
 
 test("the list patch emits the same layout notification names as the app", () => {
   const patch = readFileSync(join(import.meta.dir, "../../patches/@legendapp%2Flist@3.3.5.patch"), "utf8");
-  const names = [...patch.matchAll(/new Event\("([^"\n]+)"/g)].map((match) => match[1]);
+  const names = [...patch.matchAll(/new \w*Event\("([^"\n]+)"/g)].map((match) => match[1]);
   expect(names).toContain(LAYOUT_SCROLL_START);
   expect(names).toContain(LAYOUT_SCROLL_END);
 });

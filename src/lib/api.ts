@@ -1214,10 +1214,6 @@ export async function startAgentInstall(agent: string, machineId = "local", alte
   return (await response.json()) as AgentTabStarted;
 }
 
-export async function startAgentSignIn(agent: string, machineId = "local"): Promise<AgentTabStarted> {
-  return (await (await sendJson(machinePath(machineId, "agent-catalog/sign-in"), "POST", { agent })).json()) as AgentTabStarted;
-}
-
 export async function fetchIntegrations(machineId = "local"): Promise<IntegrationsResponse["integrations"]> {
   return (await getJson<IntegrationsResponse>(machinePath(machineId, "integrations"))).integrations;
 }
@@ -1478,8 +1474,8 @@ export async function fetchPanePrompt(paneId: string, machineId = "local"): Prom
   return (await fetchPanePromptState(paneId, machineId)).prompt;
 }
 
-export async function fetchPanePromptState(paneId: string, machineId = "local"): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes: CommandOutcome[] }> {
-  const body = await getJson<PanePromptResponse>(machinePath(machineId, `pane/prompt?pane_id=${encodeURIComponent(paneId)}`));
+export async function fetchPanePromptState(paneId: string, machineId = "local", signal?: AbortSignal): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes: CommandOutcome[] }> {
+  const body = await withChatReadDeadline((bounded) => getJson<PanePromptResponse>(machinePath(machineId, `pane/prompt?pane_id=${encodeURIComponent(paneId)}`), { signal: bounded }), chatReadDeadlineMs(machineId), signal);
   return {
     prompt: body.prompt,
     suggestion: typeof body.suggestion === "string" && body.suggestion !== "" ? body.suggestion : null,

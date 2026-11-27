@@ -2906,8 +2906,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   (`enterKeyHint="done"`) rather than its inferred **Next**; moving focus alone makes nothing.
   Unlike Paseo's separate New directory step, this keeps Ovis's existing inline Enter flow without
   another control or step; no code is borrowed.
-- Recent folders appear as neutral `.btn` chips with `--radius-pill` and `--space-2` gaps: the
-  three most recent, on one row that never wraps. Each shows the folder basename with ellipsis
+- Recent folders appear as neutral `.btn` chips with `--radius-pill` and `--space-2` gaps, on one
+  row that never wraps: the ten most recent at first. A wider screen shows as many as the row holds
+  and a `+N` chip counting every other folder kept; it opens a list of the loaded ones with their
+  paths, which ends with **Show N more** while more are kept. That item adds the next ten, leaves
+  the list open and hands the focus to the first folder it added. A phone swipes the row sideways,
+  and its `+N` chip at the end adds the next ten to the row. Keyboard activation follows the
+  wide-screen list: it focuses and reveals the first folder added, even when `+N` disappears.
+  Zed's Open Recent lists every recent project in a searchable picker; here Directory and Browse
+  already search, so the list stays short and grows ten at a time only when asked. Each shows the folder basename with ellipsis
   and the full path in its tooltip and accessible name. Clicking puts the folder in Directory and
   starts nothing. History is per PC in this browser and retained after panes close. Only a
   successful workspace start puts its folder first; a folder merely seen in a connected PC's panes
@@ -3772,6 +3779,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   WKWebView do, and keep theirs: the sheet follows Android Chrome's link menu, cut to those three.
   Only the WebView's own long press (its `contextmenu`, not a mouse's) opens it, so a tap, a swipe
   and a press on other words keep their meaning.
+  In the iPhone and iPad Home Screen web app on iOS or iPadOS 17 and later, an HTTPS link to
+  another site opens in Safari, where the user is signed in, not in the app's own view.
+  `safariLinks.ts` uses Safari's undocumented `x-safari-https:` for `ExternalLink` taps and terminal links alike, a
+  sign-in page's link included; a sign-in its button opens through `reserveTab` stays in the app's
+  view, and both finish, since the app polls for the code. A plain http link and a link to the app's
+  own origin stay in the app; iOS 16, unknown versions, Safari tabs, native apps and other systems
+  are unchanged. A native coding-agent app can open a link in Apple's in-app Safari view
+  (`SFSafariViewController`); a Home Screen web app has no such view, so it hands the link to Safari
+  instead.
   Markdown files use the same renderer in the file viewer. **Open in a new tab** opens an
   app link to the resolved absolute file on its own PC, independent of the originating pane.
   **Open raw file** (Code glyph) opens the original bytes; Download still saves those bytes.
@@ -4174,9 +4190,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   pane of about 40) shows the preview in unreadable pieces, so the card shows none. It follows
   Claude Code's terminal, which shows the preview beside the option it belongs to.
 - Height: at most the larger of 60% of the app's height (`--app-height`, so a phone's keyboard
-  counts) and six touch rows (`240px`), at every width. Only the reference text gives way: six
-  lines at rest, two at the least (one for a one-line command), scrolling in itself with a fade
-  on its fold. The header, step chips, question, hint, options, custom answer and confirm row
+  counts) and six touch rows (`240px`). Questions without preceding terminal words use 80%
+  instead, leaving room for their options and up to ten scrollable lines of their own context.
+  The separate terminal words keep the standard limit and give way as described above, following
+  Claude Code's terminal. Reference text gives way too: six lines at rest, two at the least
+  (one for a one-line command), scrolling in itself with a fade on its fold.
+  The header, step chips, question, hint, options, custom answer and confirm row
   never shrink. A card still taller than its limit scrolls as a whole with a fade at its bottom
   edge, and the confirm row of a typed pick stays pinned on that edge. The card's scroll is
   contained (`overscroll-behavior: contain`), so a drag past its top is never the page's
@@ -4201,6 +4220,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   then reads `Question 1 of 2`; the review after the last question keeps the chips, all checked.
 - Single options submit immediately; multi-select exposes checks plus Submit; supported custom input
   has its own labelled field. The prompt id names what the prompt says and which asking of it this is; an answer to another prompt, or to an earlier asking of the same one, is rejected with `prompt_changed`.
+- When Chat sees a terminal resize during a Claude Code approval, it keeps the card in place and
+  briefly disables its choices while reading the redrawn screen. This follows Claude Code's
+  terminal, where a resize leaves the approval open. The live answer check still binds the
+  selection to the command and permission scope on screen.
 - OpenCode's native multi-step form uses the same question card, not a new wizard. Back and
   answered-step chips save the current step's unsent text and checks before navigating. Returning
   restores them without submitting them to the agent. This keeps the existing T3 Code-inspired
@@ -5614,7 +5637,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   resize it to reveal the caret. No terminal pixels or input handling code are copied from Zed.
   Local wheel panning in an oversized mirror survives subsequent output. A tap or a touch movement
   that produces no history step sends no shared scroll request.
-- A mirrored grid wider than its mount (a Windows PC's pane, whose size a phone cannot change) is
+- A Windows terminal whose CLI and daemon support the native control stream fits the active
+  browser's grid, like a locally sized terminal in Zed, but only after herdr grants the
+  exclusive attachment. Other viewers adopt the confirmed grid; an observe or kept-size
+  attach never claims the slot. Neither opening a second view nor reconnecting takes over.
+  Without verified stream support the existing mirror stays fixed.
+- A mirrored grid wider than its mount (for example, a Windows PC without verified stream support) is
   drawn folded (`lib/terminalFold.ts`): its rows are drawn again as SGR runs in a pre-wrap block at
   the mount's width, over the grid, which stays at the pane's size for input, the masked prompt, the
   input row and Find; it moves down under the folded rows until its cursor row lies on theirs, so an
